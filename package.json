@@ -8,7 +8,9 @@
 		"build": "bunx --bun vite build",
 		"preview": "vite preview",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
-		"rules": "bun run scripts/rules.ts"
+		"rules": "bun run scripts/rules.ts",
+		"review-data": "bun run scripts/review-data.ts",
+		"apply-proposals": "bun run scripts/apply-proposals.ts"
 	},
 	"devDependencies": {
 		"@sveltejs/adapter-auto": "^3.0.0",
