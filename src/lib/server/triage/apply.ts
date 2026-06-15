@@ -137,7 +137,7 @@ export async function recordVerdict(opts: {
 	ruleId: string;
 	ruleVersionId: string;
 	threadId: string;
-	verdict: 'amend_skip' | 'save' | 'reject';
+	verdict: 'amend_skip' | 'save' | 'reject' | 'correct';
 	note?: string | null;
 }): Promise<void> {
 	await db.insert(verdicts).values({
@@ -160,6 +160,7 @@ export async function recordApproveVerdict(opts: {
 	ruleId: string;
 	ruleVersionId: string;
 	threadId: string;
+	note?: string | null;
 }): Promise<void> {
 	await db.insert(verdicts).values({
 		accountId: opts.accountId,
@@ -168,6 +169,7 @@ export async function recordApproveVerdict(opts: {
 		ruleId: opts.ruleId,
 		runId: opts.runId,
 		verdict: 'approve',
+		note: opts.note ?? null,
 		createdAt: new Date()
 	});
 }

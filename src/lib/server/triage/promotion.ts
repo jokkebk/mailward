@@ -48,7 +48,8 @@ export interface DispositionMetrics {
  * version only. Verdicts are attributed to a disposition by joining through the
  * proposal that produced them (a router rule's version spans several dispositions).
  *
- * Gate mapping (DESIGN.md): approve=success · reject / amend_skip-with-note=failure ·
+ * Gate mapping (DESIGN.md): applied action=success for the chosen disposition;
+ * reject / correct / amend_skip-with-note=failure for the suggested disposition;
  * amend_skip-no-note / save=excluded. A post-hoc rollback is a strong failure.
  */
 export async function dispositionMetrics(
@@ -81,16 +82,19 @@ export async function dispositionMetrics(
 	};
 	if (!versionId) return empty;
 
-	// Threads this version dispositioned to `action` (from the proposals it produced).
-	const dispositioned = await db
-		.select({ threadId: proposals.threadId })
+	// Original suggestions for this version. Failures/exclusions are attributed
+	// to the suggested disposition; applied successes are attributed below to
+	// the action the user actually chose.
+	const suggested = await db
+		.select({ threadId: proposals.threadId, action: proposals.action })
 		.from(proposals)
-		.where(and(eq(proposals.ruleVersionId, versionId), eq(proposals.action, action)))
+		.where(eq(proposals.ruleVersionId, versionId))
 		.all();
-	const threadSet = new Set(dispositioned.map((d) => d.threadId));
-	if (threadSet.size === 0) return empty;
+	const suggestedActionByThread = new Map(suggested.map((p) => [p.threadId, p.action]));
 
-	// Verdicts for this version, newest first, restricted to those threads.
+	// Verdicts for this version. `approve` is kept for dedup/history, but the
+	// promotion success signal comes from the applied action rows so corrected
+	// actions count toward the disposition the user chose.
 	const vrows = await db
 		.select({
 			threadId: verdicts.threadId,
@@ -103,26 +107,50 @@ export async function dispositionMetrics(
 		.orderBy(desc(verdicts.createdAt))
 		.all();
 
+	const appliedRows = await db
+		.select({ id: actions.id, createdAt: actions.createdAt })
+		.from(actions)
+		.where(
+			and(
+				eq(actions.ruleVersionId, versionId),
+				eq(actions.action, action),
+				eq(actions.status, 'applied')
+			)
+		)
+		.all();
+
+	const events: { outcome: 'success' | 'failure' | 'excluded'; createdAt: Date }[] = appliedRows.map(
+		(a) => ({
+			outcome: 'success',
+			createdAt: a.createdAt
+		})
+	);
+
+	for (const v of vrows) {
+		if (suggestedActionByThread.get(v.threadId) !== action) continue;
+		const hasNote = Boolean(v.note && String(v.note).trim());
+		let outcome: 'success' | 'failure' | 'excluded' | null = null;
+		if (v.verdict === 'reject' || v.verdict === 'correct') outcome = 'failure';
+		else if (v.verdict === 'amend_skip') outcome = hasNote ? 'failure' : 'excluded';
+		else if (v.verdict === 'save') outcome = 'excluded';
+		if (outcome) events.push({ outcome, createdAt: v.createdAt });
+	}
+	events.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+
 	let success = 0;
 	let failure = 0;
 	let excluded = 0;
 	let scored = 0;
 	let leadingSuccessRun = 0;
 	let runBroken = false;
-	for (const v of vrows.filter((v) => threadSet.has(v.threadId)).slice(0, gate.minRun * 3)) {
-		const hasNote = Boolean(v.note && String(v.note).trim());
-		let outcome: 'success' | 'failure' | 'excluded';
-		if (v.verdict === 'approve') outcome = 'success';
-		else if (v.verdict === 'reject') outcome = 'failure';
-		else if (v.verdict === 'amend_skip') outcome = hasNote ? 'failure' : 'excluded';
-		else outcome = 'excluded'; // save / other
-		if (outcome === 'success') success++;
-		else if (outcome === 'failure') failure++;
+	for (const event of events.slice(0, gate.minRun * 3)) {
+		if (event.outcome === 'success') success++;
+		else if (event.outcome === 'failure') failure++;
 		else excluded++;
-		if (outcome !== 'excluded') {
+		if (event.outcome !== 'excluded') {
 			scored++;
 			if (!runBroken) {
-				if (outcome === 'success') leadingSuccessRun++;
+				if (event.outcome === 'success') leadingSuccessRun++;
 				else runBroken = true;
 			}
 		}
@@ -142,18 +170,6 @@ export async function dispositionMetrics(
 		.all();
 	const rolledBack = rb.length;
 	failure += rolledBack;
-
-	const appliedRows = await db
-		.select({ id: actions.id })
-		.from(actions)
-		.where(
-			and(
-				eq(actions.ruleVersionId, versionId),
-				eq(actions.action, action),
-				eq(actions.status, 'applied')
-			)
-		)
-		.all();
 
 	const approvalPct = success + failure > 0 ? Math.round((success / (success + failure)) * 100) : null;
 	const eligible =

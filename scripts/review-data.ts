@@ -99,7 +99,7 @@ function fmtAction(tier: string, stored: string): string {
 // Promotion bar per disposition (DESIGN.md): delete is tighter than archive/label.
 const DISPOSITION_BAR: Record<string, number> = { trash: 99, archive: 95, label_todo: 95 };
 
-/** Gate tally: approve=success · reject / amend_skip-with-note=failure · else excluded. */
+/** Gate tally: approve=success · reject / correct / amend_skip-with-note=failure · else excluded. */
 function tally(rows: { verdict: string; note: unknown }[]) {
 	let success = 0;
 	let failure = 0;
@@ -107,7 +107,7 @@ function tally(rows: { verdict: string; note: unknown }[]) {
 	for (const v of rows) {
 		const hasNote = Boolean(v.note && String(v.note).trim());
 		if (v.verdict === 'approve') success++;
-		else if (v.verdict === 'reject') failure++;
+		else if (v.verdict === 'reject' || v.verdict === 'correct') failure++;
 		else if (v.verdict === 'amend_skip') hasNote ? failure++ : excluded++;
 		else excluded++;
 	}
@@ -191,6 +191,7 @@ for (const acc of accounts) {
 	// Gate mapping (DESIGN.md §"Promotion to auto-apply"):
 	//   approve                 -> success
 	//   reject                  -> failure
+	//   correct                 -> failure
 	//   amend_skip WITH note    -> failure (corrective)
 	//   amend_skip WITHOUT note -> excluded
 	//   save                    -> excluded
@@ -198,7 +199,7 @@ for (const acc of accounts) {
 	out('## 2. Per-version metrics (decision support only — the app owns promotion)');
 	out();
 	out(
-		'> Mapping: approve=success · reject / amend_skip-with-note=failure · amend_skip-no-note / save=excluded.'
+		'> Mapping: approve=success · reject / correct / amend_skip-with-note=failure · amend_skip-no-note / save=excluded.'
 	);
 	out('> Delete demands ~99% approval; archive/label a looser bar. Mind sample size + time.');
 	out();
@@ -220,7 +221,7 @@ for (const acc of accounts) {
 		for (const v of windowed) {
 			const hasNote = Boolean(v.note && String(v.note).trim());
 			if (v.verdict === 'approve') success++;
-			else if (v.verdict === 'reject') failure++;
+			else if (v.verdict === 'reject' || v.verdict === 'correct') failure++;
 			else if (v.verdict === 'amend_skip') hasNote ? failure++ : excluded++;
 			else if (v.verdict === 'save') excluded++;
 			else excluded++;

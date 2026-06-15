@@ -77,8 +77,13 @@ deferred.
 
 ## Review UI
 
-Proposals grouped by rule (collapsible cards), threads pre-checked, confidence-coloured lines.
-Three verbs:
+Proposals are grouped by rule (collapsible cards), but deterministic and AI rules use different
+review controls.
+
+### Deterministic rule review
+
+Deterministic rules propose one action for every matching thread. Threads are pre-checked,
+confidence is not needed, and the checkbox model stays natural. Three verbs:
 
 | Verb | Applies | Metric effect | Note |
 |------|---------|---------------|------|
@@ -86,10 +91,42 @@ Three verbs:
 | **Amend** | checked subset | unchecked = negatives | optional, prompted |
 | **Reject** | nothing | whole batch counts against rule | **mandatory note** |
 
-- **Reject dialog** carries a **"Suspend this rule until revised"** checkbox (no separate
-  button) → `suspended`, stops proposing until a new version revives it.
-- Optional single-tap **"save this one"** on an unchecked item = "right rule, not this
-  instance" → excluded from the promotion metric in real time.
+Optional single-tap **"save this one"** on an unchecked item = "right rule, not this instance"
+→ excluded from the promotion metric in real time.
+
+### AI router review
+
+AI router rules produce per-thread disposition recommendations. The rule card is still the
+container, but the review unit is the individual thread. Rows are sorted by suggested
+disposition, then confidence, and stay in their original suggested section while editing so the
+list does not jump.
+
+Each row shows the available dispositions in one button group:
+
+`Trash | Archive | TODO | Skip | Correct`
+
+- The AI suggestion is preselected.
+- The active choice uses filled/background styling.
+- The original AI suggestion keeps a stronger border, so changed rows are easy to spot.
+- AI reasons are hidden by default and shown on demand next to the row note field.
+- Notes are optional for any row except **Correct**, which requires one.
+- **Skip** means do nothing and learn nothing; it is excluded from promotion metrics.
+- **Correct** means do nothing but learn from the mistake; it counts as corrective feedback.
+- Changing `Archive → Trash`, `TODO → Archive`, etc. is automatically a correction: negative
+  evidence for the suggested disposition and positive evidence for the chosen disposition.
+
+AI router cards have top-level controls:
+
+- **Apply reviewed** — submits the current reviewed set. Row edits are drafts until this is
+  clicked; Gmail actions never fire while toggling row choices.
+- **Reset suggestions** — restores every row to the AI's original recommendation; no Gmail
+  action.
+- **Reject...** — rejects the whole group without Gmail action. The dialog requires a reason
+  and offers two final actions: **Send reason** or **Send reason and suspend rule**.
+
+### Shared review behavior
+
+- **Reject** / **Reject...** can suspend the rule until a new version revives it.
 - Near-misses are **not** shown per card (97% noise). Instead the uncovered bucket offers
   "this should've been caught by rule X" to capture the valuable positive examples on demand.
 
