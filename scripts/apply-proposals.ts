@@ -17,9 +17,21 @@
  *   {
  *     "accountId": "you@example.com",
  *     "proposals": [
+ *       // Deterministic rule: a single action, executed in code by a pure match.
  *       { "op": "create", "name": "...", "priority": 100, "action": "archive",
  *         "tier": "deterministic", "needsBody": false, "intent": "...",
  *         "matchCriteria": { "type": "all", "conditions": [...] },
+ *         "changeNote": "why" },
+ *       // AI ROUTER rule: ONE category -> MANY dispositions. `action` is the SET of
+ *       // dispositions the model may assign; 'leave' (don't claim) is always implicit.
+ *       // The matchCriteria is a cheap prefilter that narrows candidates; the model
+ *       // adjudicates each one. Set needsBody:true when the call must read the body
+ *       // (e.g. "trash the bare calendar response, but TODO it if there's a note").
+ *       { "op": "create", "name": "Calendar invites", "priority": 20,
+ *         "action": ["trash", "label_todo"], "tier": "ai", "needsBody": true,
+ *         "intent": "Trash bare accept/decline responses; TODO invites that need a reply.",
+ *         "matchCriteria": { "type": "all",
+ *           "conditions": [{ "field": "isCalendarInvite", "operator": "is", "value": true }] },
  *         "changeNote": "why" },
  *       { "op": "edit", "ruleId": "<id>", "priority": 90, "action": "trash",
  *         "matchCriteria": {...}, "intent": "...", "changeNote": "why" },
@@ -28,7 +40,10 @@
  *     ]
  *   }
  *
- * `edit` fields are optional — omitted fields inherit from the current version.
+ * `action`: a string for deterministic rules; a non-empty array for AI rules (the
+ *   allowed dispositions, each one of archive|trash|label_todo). 'leave' is implicit.
+ * `edit` fields are optional — omitted fields inherit from the current version. An
+ *   edit reseeds the rule's per-disposition promotion rows to `proposing`.
  * A MERGE = compose: edit/keep the survivor + suspend|delete the absorbed rules.
  * `delete` is refused if any action/verdict references the rule (suspend instead),
  * so the reversible log is never orphaned.

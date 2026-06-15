@@ -83,14 +83,35 @@ function subjectSignature(subject: string | null): string {
 }
 
 /** AI router rules store `action` as a JSON array of allowed dispositions. */
-function fmtAction(tier: string, stored: string): string {
-	if (tier !== 'ai') return stored;
+function parseDispositions(tier: string, stored: string): string[] {
+	if (tier !== 'ai') return [stored];
 	try {
 		const arr = JSON.parse(stored);
-		return Array.isArray(arr) ? `${arr.join('/')} (+leave)` : stored;
+		return Array.isArray(arr) && arr.length ? arr : [stored];
 	} catch {
-		return stored;
+		return [stored];
 	}
+}
+function fmtAction(tier: string, stored: string): string {
+	return tier === 'ai' ? `${parseDispositions(tier, stored).join('/')} (+leave)` : stored;
+}
+
+// Promotion bar per disposition (DESIGN.md): delete is tighter than archive/label.
+const DISPOSITION_BAR: Record<string, number> = { trash: 99, archive: 95, label_todo: 95 };
+
+/** Gate tally: approve=success · reject / amend_skip-with-note=failure · else excluded. */
+function tally(rows: { verdict: string; note: unknown }[]) {
+	let success = 0;
+	let failure = 0;
+	let excluded = 0;
+	for (const v of rows) {
+		const hasNote = Boolean(v.note && String(v.note).trim());
+		if (v.verdict === 'approve') success++;
+		else if (v.verdict === 'reject') failure++;
+		else if (v.verdict === 'amend_skip') hasNote ? failure++ : excluded++;
+		else excluded++;
+	}
+	return { success, failure, excluded };
 }
 
 function trunc(s: unknown, n: number): string {
@@ -185,7 +206,7 @@ for (const acc of accounts) {
 	for (const r of ruleRows) {
 		const verdictRows = db
 			.query(
-				`SELECT verdict, exclude_from_metric, note, created_at
+				`SELECT thread_id, verdict, exclude_from_metric, note, created_at
 				 FROM verdicts
 				 WHERE rule_version_id = ?
 				 ORDER BY created_at DESC`
@@ -228,6 +249,37 @@ for (const acc of accounts) {
 				(verdictRows.length > windowed.length ? ` · (lifetime ${verdictRows.length} verdicts)` : '') +
 				(neverMatched ? ' · ⚠ no verdicts yet (never matched, or proposals still pending review)' : '')
 		);
+
+		// AI router rules: break the window down PER DISPOSITION — promotion is
+		// per (rule, disposition), so a rule-level rate conflates different bars.
+		if (r.tier === 'ai') {
+			const props = db
+				.query(`SELECT thread_id, action FROM proposals WHERE rule_version_id = ?`)
+				.all(r.version_id) as any[];
+			const dispOf = new Map<string, string>();
+			for (const p of props) dispOf.set(p.thread_id, p.action);
+
+			const actByDisp = db
+				.query(
+					`SELECT action, status, count(*) AS n FROM actions
+					 WHERE rule_version_id = ? GROUP BY action, status`
+				)
+				.all(r.version_id) as any[];
+			const countOf = (a: string, st: string) =>
+				actByDisp.filter((x) => x.action === a && x.status === st).reduce((s, x) => s + x.n, 0);
+
+			for (const disp of parseDispositions(r.tier, r.action)) {
+				const dv = verdictRows.filter((v) => dispOf.get(v.thread_id) === disp).slice(0, WINDOW);
+				const t = tally(dv);
+				const ds = t.success + t.failure;
+				const drate = ds ? `${Math.round((t.success / ds) * 100)}%` : 'n/a';
+				const bar = DISPOSITION_BAR[disp] ?? 95;
+				out(
+					`    └ ${disp}: approval ${drate} [✓${t.success} ✗${t.failure} ⊘${t.excluded} over ${dv.length}] · ` +
+						`applied ${countOf(disp, 'applied')} · rolled_back ${countOf(disp, 'rolled_back')} · bar ≥${bar}%`
+				);
+			}
+		}
 	}
 	out();
 

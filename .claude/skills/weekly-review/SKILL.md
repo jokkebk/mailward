@@ -57,6 +57,10 @@ Produce a short, skimmable report. Lead with what matters:
   N is small or the window is short. Flag rollbacks (a strong negative signal).
   Remember: **delete demands ~99% approval; archive/label a looser bar.** Do NOT
   recommend promotion — that's the app's job; you may *note* a rule looks gate-ready.
+  For **AI router rules, read the per-disposition breakdown** (§2 splits an AI rule's
+  metrics by disposition): judge each disposition against its own bar — the rule-level
+  aggregate conflates a strict `trash` with a loose `label_todo`. A rule can be
+  disposition-ready for one action and not another.
 - **Feedback themes** — cluster the reject/amend/manual notes into patterns ("calendar
   responses with a human note keep getting rejected → the rule needs the AI-tier
   'unless there's a note' carve-out").
@@ -104,8 +108,34 @@ this review → next run.
 - The write helper refuses to `delete` a rule that any action/verdict references (it
   would orphan the reversible log) — `suspend` those instead.
 - Edits inherit omitted fields from the current version; only specify what changes.
-- v1 of the app executes **deterministic** rules only. You may still author `ai`-tier
-  proposals (with `intent` + `needsBody`), but note to the user they won't run until
-  the AI tier ships.
 - Keep `data/proposals.json` out of git if it contains nothing reusable; it's a scratch
   handoff to the write helper.
+
+## Authoring AI router rules (the AI tier is live)
+
+The app runs **both** deterministic and AI rules, interleaved by priority. Reach for
+an AI (`tier:"ai"`) rule when a *category* needs **semantic judgement** or **fans into
+several dispositions** — something a pure structural match can't decide.
+
+- **One AI rule = one category → many dispositions.** `action` is the *set* the model
+  may assign, e.g. `["trash","label_todo"]` (each one of `archive|trash|label_todo`).
+  `leave` (don't claim → falls through to later rules / uncovered) is always implicit —
+  never list it. Don't make three single-action rules for one category; make one router
+  rule with the action set.
+- **The `matchCriteria` is a cheap prefilter, not the decision** — it narrows candidates;
+  the model adjudicates each. Keep it broad enough to catch the category, lean on the
+  `intent` for the nuance.
+- **`needsBody:true`** when the judgement needs the email body (the classic hybrid:
+  "trash the bare calendar accept/decline, but `label_todo` it if there's a human note").
+  Leave it false when subject/snippet/sender suffice — body fetch costs an extra call.
+- **Write a sharp `intent`.** It's the model's whole instruction: say what each
+  disposition means for this category and when to `leave`. Ground it in the feedback log
+  (e.g. a recurring reject reason becomes an explicit carve-out in the intent).
+- **Match fields available** for prefilters: string fields `from`/`fromDomain`/`to`/
+  `subject`/`snippet` (ops: equals/contains/startsWith/endsWith/in/regex); `ageDays`
+  (olderThan/newerThan); `label` (has/lacks a Gmail label id); and the cheap booleans
+  `isCalendarInvite` / `hasUnsubscribe` (op `is`, value true/false).
+
+You still only ever create rules at `proposing` (invariant #1). Promotion to auto is the
+app's gate + the user's click — and for AI rules that gate is **per disposition** (see
+below), so an AI rule's `trash` can graduate while its `archive` keeps proving itself.
