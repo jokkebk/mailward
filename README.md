@@ -41,7 +41,7 @@ bun run dev            # http://localhost:5173
    add your account under **Test users**. (Testing-status apps expire the refresh token
    ~weekly — Mailward detects this and shows a **Reauthorize** button.)
 3. Create OAuth 2.0 **Web application** credentials.
-4. Add redirect URI `http://localhost:5173/auth/callback` (dev). Add `:3000` too if you run the built server.
+4. Add redirect URI `http://localhost:5173/auth/callback`.
 5. Put the Client ID / Secret in `.env`.
 
 You can reuse the same Google project as mailnick — just add the `:5173` redirect URI.

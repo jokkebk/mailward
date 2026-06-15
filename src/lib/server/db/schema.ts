@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, text, integer, index } from 'drizzle-orm/sqlite-core';
 
 /**
  * Mailward schema.
@@ -78,7 +78,9 @@ export const ruleVersions = sqliteTable('rule_versions', {
 	createdAt: integer('created_at', { mode: 'timestamp' })
 		.notNull()
 		.$defaultFn(() => new Date())
-});
+}, (t) => ({
+	ruleIdx: index('idx_rule_versions_rule').on(t.ruleId)
+}));
 
 /** One triage session. */
 export const runs = sqliteTable('runs', {
@@ -119,7 +121,10 @@ export const actions = sqliteTable('actions', {
 		.$defaultFn(() => new Date()),
 	appliedAt: integer('applied_at', { mode: 'timestamp' }),
 	rolledBackAt: integer('rolled_back_at', { mode: 'timestamp' })
-});
+}, (t) => ({
+	runIdx: index('idx_actions_run').on(t.runId),
+	runRuleIdx: index('idx_actions_run_rule').on(t.runId, t.ruleId)
+}));
 
 /**
  * Dedup + training signal keyed on (thread, ruleVersion). Records decisions
@@ -141,4 +146,6 @@ export const verdicts = sqliteTable('verdicts', {
 	createdAt: integer('created_at', { mode: 'timestamp' })
 		.notNull()
 		.$defaultFn(() => new Date())
-});
+}, (t) => ({
+	threadVersionIdx: index('idx_verdicts_thread_version').on(t.threadId, t.ruleVersionId)
+}));
