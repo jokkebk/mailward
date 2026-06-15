@@ -27,11 +27,38 @@ interface SyncResult {
 	totalThreads: number;
 }
 
+interface SyncProgress {
+	current: number;
+	total: number;
+}
+
+export interface SyncOptions {
+	onList?: (totalThreads: number) => void | Promise<void>;
+	onMetadata?: (progress: SyncProgress) => void | Promise<void>;
+}
+
+async function mapLimit<T, R>(
+	items: T[],
+	limit: number,
+	fn: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+	const out = new Array<R>(items.length);
+	let next = 0;
+	const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+		while (next < items.length) {
+			const index = next++;
+			out[index] = await fn(items[index], index);
+		}
+	});
+	await Promise.all(workers);
+	return out;
+}
+
 /**
  * Sync unread-in-inbox threads (newest first, capped). One row per thread,
  * holding the latest message's metadata and the unread message ids.
  */
-export async function syncUnreadInbox(accountId: string): Promise<SyncResult> {
+export async function syncUnreadInbox(accountId: string, options: SyncOptions = {}): Promise<SyncResult> {
 	const gmail = await getGmailClient(accountId);
 
 	const query = `is:unread in:inbox newer_than:${SYNC_WINDOW_DAYS}d`;
@@ -55,8 +82,11 @@ export async function syncUnreadInbox(accountId: string): Promise<SyncResult> {
 		byThread.get(m.threadId)!.push(m.id);
 	}
 
-	let syncedCount = 0;
-	for (const threadId of threadOrder.slice(0, MAX_THREADS_PER_RUN)) {
+	await options.onList?.(byThread.size);
+
+	const selectedThreadIds = threadOrder.slice(0, MAX_THREADS_PER_RUN);
+	let metadataDone = 0;
+	const rows = await mapLimit(selectedThreadIds, 6, async (threadId) => {
 		const messageIds = byThread.get(threadId)!;
 		// Representative = first (newest) unread message in the thread.
 		const repId = messageIds[0];
@@ -92,6 +122,13 @@ export async function syncUnreadInbox(accountId: string): Promise<SyncResult> {
 			syncedAt: new Date()
 		};
 
+		metadataDone++;
+		await options.onMetadata?.({ current: metadataDone, total: selectedThreadIds.length });
+		return { threadId, row };
+	});
+
+	let syncedCount = 0;
+	for (const { threadId, row } of rows) {
 		const existing = await db
 			.select({ id: threads.id })
 			.from(threads)

@@ -4,6 +4,7 @@ import { drizzle } from 'drizzle-orm/bun-sqlite';
 import { migrate } from 'drizzle-orm/bun-sqlite/migrator';
 import { mkdirSync, existsSync } from 'fs';
 import { dirname } from 'path';
+import { markStaleRuns } from './triage/telemetry';
 
 let initialized = false;
 
@@ -81,6 +82,7 @@ export function initialize() {
 	try {
 		validateEnvironment();
 		runMigrations();
+		markStaleRuns().catch((error) => console.warn('⚠️  Failed to mark stale runs:', error));
 		initialized = true;
 		console.log('✅ Mailward initialized\n');
 	} catch (error) {

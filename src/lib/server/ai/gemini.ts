@@ -5,8 +5,8 @@ import {
 	CONFIDENCE_BANDS,
 	normalizeVerdicts,
 	type Classifier,
+	type ClassifyResult,
 	type ClassifyRequest,
-	type ClassifyVerdict
 } from './classifier';
 import { SYSTEM_PROMPT, buildUserPrompt } from './prompt';
 
@@ -23,14 +23,20 @@ export class GeminiClassifier implements Classifier {
 		return this.#client;
 	}
 
-	async classify(req: ClassifyRequest): Promise<ClassifyVerdict[]> {
-		if (req.threads.length === 0) return [];
+	async classify(req: ClassifyRequest): Promise<ClassifyResult> {
 		const model = env.GEMINI_MODEL || 'gemini-2.5-flash';
+		const prompt = buildUserPrompt(req);
+		if (req.threads.length === 0) {
+			return {
+				verdicts: [],
+				usage: { provider: 'gemini', model, promptChars: prompt.length, responseChars: 0 }
+			};
+		}
 		const allowed: Disposition[] = [...req.allowedActions, 'leave'];
 
 		const response = await this.#getClient().models.generateContent({
 			model,
-			contents: buildUserPrompt(req),
+			contents: prompt,
 			config: {
 				systemInstruction: SYSTEM_PROMPT,
 				temperature: 0,
@@ -54,6 +60,18 @@ export class GeminiClassifier implements Classifier {
 
 		const text = response.text;
 		if (!text) throw new Error('Gemini returned an empty response');
-		return normalizeVerdicts(JSON.parse(text), req);
+		const usage = response.usageMetadata;
+		return {
+			verdicts: normalizeVerdicts(JSON.parse(text), req),
+			usage: {
+				provider: 'gemini',
+				model,
+				promptChars: prompt.length,
+				responseChars: text.length,
+				promptTokens: usage?.promptTokenCount ?? null,
+				responseTokens: usage?.candidatesTokenCount ?? null,
+				totalTokens: usage?.totalTokenCount ?? null
+			}
+		};
 	}
 }

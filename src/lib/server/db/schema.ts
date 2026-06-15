@@ -102,6 +102,77 @@ export const runs = sqliteTable('runs', {
 	status: text('status').notNull().default('running') // 'running' | 'completed' | 'failed' | 'reauth_required'
 });
 
+/** Progress + profiling events emitted while a run is executing. */
+export const runSteps = sqliteTable('run_steps', {
+	id: text('id').primaryKey().$defaultFn(() => crypto.randomUUID()),
+	runId: text('run_id')
+		.notNull()
+		.references(() => runs.id),
+	accountId: text('account_id')
+		.notNull()
+		.references(() => tokens.id),
+	stage: text('stage').notNull(),
+	status: text('status').notNull().default('running'), // 'running' | 'completed' | 'failed'
+	ruleId: text('rule_id'),
+	ruleVersionId: text('rule_version_id'),
+	ruleName: text('rule_name'),
+	batchIndex: integer('batch_index'),
+	batchTotal: integer('batch_total'),
+	current: integer('current').default(0),
+	total: integer('total'),
+	matchedCount: integer('matched_count'),
+	claimedCount: integer('claimed_count'),
+	bodyFetchCount: integer('body_fetch_count'),
+	aiBatchCount: integer('ai_batch_count'),
+	durationMs: integer('duration_ms'),
+	error: text('error'),
+	metadata: text('metadata'), // JSON; counters and diagnostics only, no message bodies/prompts
+	startedAt: integer('started_at', { mode: 'timestamp' })
+		.notNull()
+		.$defaultFn(() => new Date()),
+	updatedAt: integer('updated_at', { mode: 'timestamp' })
+		.notNull()
+		.$defaultFn(() => new Date()),
+	endedAt: integer('ended_at', { mode: 'timestamp' })
+}, (t) => ({
+	runIdx: index('idx_run_steps_run').on(t.runId),
+	runStatusIdx: index('idx_run_steps_run_status').on(t.runId, t.status),
+	runRuleIdx: index('idx_run_steps_run_rule').on(t.runId, t.ruleId)
+}));
+
+/** Per-provider AI call usage. Stores usage/cost signals, never prompts or responses. */
+export const aiCallLogs = sqliteTable('ai_call_logs', {
+	id: text('id').primaryKey().$defaultFn(() => crypto.randomUUID()),
+	runId: text('run_id')
+		.notNull()
+		.references(() => runs.id),
+	accountId: text('account_id')
+		.notNull()
+		.references(() => tokens.id),
+	ruleId: text('rule_id').notNull(),
+	ruleVersionId: text('rule_version_id').notNull(),
+	ruleName: text('rule_name').notNull(),
+	provider: text('provider').notNull(),
+	model: text('model').notNull(),
+	batchIndex: integer('batch_index').notNull(),
+	batchTotal: integer('batch_total').notNull(),
+	threadCount: integer('thread_count').notNull(),
+	promptChars: integer('prompt_chars').notNull().default(0),
+	responseChars: integer('response_chars').notNull().default(0),
+	promptTokens: integer('prompt_tokens'),
+	responseTokens: integer('response_tokens'),
+	totalTokens: integer('total_tokens'),
+	durationMs: integer('duration_ms').notNull(),
+	status: text('status').notNull(), // 'completed' | 'failed'
+	error: text('error'),
+	createdAt: integer('created_at', { mode: 'timestamp' })
+		.notNull()
+		.$defaultFn(() => new Date())
+}, (t) => ({
+	runIdx: index('idx_ai_call_logs_run').on(t.runId),
+	runRuleIdx: index('idx_ai_call_logs_run_rule').on(t.runId, t.ruleId)
+}));
+
 /** Unified, reversible action log. Batch = (runId, ruleId). */
 export const actions = sqliteTable('actions', {
 	id: text('id').primaryKey().$defaultFn(() => crypto.randomUUID()),
@@ -119,7 +190,7 @@ export const actions = sqliteTable('actions', {
 	confidence: text('confidence'), // 'high' | 'med' | 'low' | null
 	mode: text('mode').notNull(), // 'proposed' | 'auto' | 'manual'
 	status: text('status').notNull().default('applied'), // 'applied' | 'rolled_back' | 'failed'
-	verdict: text('verdict'), // 'approve' | 'amend_skip' | 'reject' | 'save' | 'manual'
+	verdict: text('verdict'), // 'approve' | 'correct' | 'amend_skip' | 'reject' | 'save' | 'manual'
 	note: text('note'),
 	error: text('error'),
 	createdAt: integer('created_at', { mode: 'timestamp' })
@@ -134,7 +205,7 @@ export const actions = sqliteTable('actions', {
 
 /**
  * Dedup + training signal keyed on (thread, ruleVersion). Records decisions
- * even when no Gmail mutation happened (reject / save-this-one / amend-skip),
+ * even when no Gmail mutation happened (reject / correct / save-this-one / amend-skip),
  * so resolved threads are not re-proposed for the same rule version.
  */
 export const verdicts = sqliteTable('verdicts', {
@@ -146,7 +217,7 @@ export const verdicts = sqliteTable('verdicts', {
 	ruleVersionId: text('rule_version_id').notNull(),
 	ruleId: text('rule_id').notNull(),
 	runId: text('run_id'),
-	verdict: text('verdict').notNull(), // 'approve' | 'amend_skip' | 'reject' | 'save'
+	verdict: text('verdict').notNull(), // 'approve' | 'correct' | 'amend_skip' | 'reject' | 'save'
 	excludeFromMetric: integer('exclude_from_metric', { mode: 'boolean' }).default(false),
 	note: text('note'),
 	createdAt: integer('created_at', { mode: 'timestamp' })

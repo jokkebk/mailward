@@ -2,7 +2,14 @@ import { env } from '$env/dynamic/private';
 import type { Classifier } from './classifier';
 import { GeminiClassifier } from './gemini';
 
-export type { Classifier, ClassifyRequest, ClassifyVerdict, ThreadPayload } from './classifier';
+export type {
+	Classifier,
+	ClassifyRequest,
+	ClassifyResult,
+	ClassifyUsage,
+	ClassifyVerdict,
+	ThreadPayload
+} from './classifier';
 
 let cached: Classifier | null = null;
 

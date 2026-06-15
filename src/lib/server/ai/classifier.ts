@@ -32,13 +32,28 @@ export interface ClassifyVerdict {
 	reason: string;
 }
 
+export interface ClassifyUsage {
+	provider: string;
+	model: string;
+	promptChars: number;
+	responseChars: number;
+	promptTokens?: number | null;
+	responseTokens?: number | null;
+	totalTokens?: number | null;
+}
+
+export interface ClassifyResult {
+	verdicts: ClassifyVerdict[];
+	usage: ClassifyUsage;
+}
+
 /**
  * The daily triage classifier. One implementation per provider (Gemini first;
  * OpenAI / Anthropic drop in behind the same interface). Each call adjudicates
  * one router rule's candidate batch and returns a verdict per thread.
  */
 export interface Classifier {
-	classify(req: ClassifyRequest): Promise<ClassifyVerdict[]>;
+	classify(req: ClassifyRequest): Promise<ClassifyResult>;
 }
 
 /**
