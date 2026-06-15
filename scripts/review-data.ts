@@ -37,6 +37,63 @@ function ageDays(epochSeconds: number): number {
 	return Math.max(0, Math.floor((Date.now() / 1000 - epochSeconds) / 86_400));
 }
 
+// Gmail's auto-categories — the labels you triage by glance. Mapped to short names.
+const CATEGORY_NAMES: Record<string, string> = {
+	CATEGORY_PERSONAL: 'Personal',
+	CATEGORY_SOCIAL: 'Social',
+	CATEGORY_PROMOTIONS: 'Promotions',
+	CATEGORY_UPDATES: 'Updates',
+	CATEGORY_FORUMS: 'Forums'
+};
+
+function parseLabels(json: string | null): string[] {
+	if (!json) return [];
+	try {
+		const a = JSON.parse(json);
+		return Array.isArray(a) ? a : [];
+	} catch {
+		return [];
+	}
+}
+
+/** The single Gmail auto-category for a thread (or '—' if none / Primary). */
+function categoryOf(labels: string[]): string {
+	const c = labels.find((l) => l in CATEGORY_NAMES);
+	return c ? CATEGORY_NAMES[c] : '—';
+}
+
+/**
+ * A coarse "shape" for a subject so look-alike mail clusters across senders —
+ * this is what surfaces deterministic-rule candidates (e.g. "[JIRA]",
+ * "Invitation:", "Your receipt from") that per-domain bucketing hides.
+ * Strips reply/forward markers, then keys on a leading [tag], a short prefix
+ * before a colon, or the first three words.
+ */
+function subjectSignature(subject: string | null): string {
+	let s = String(subject ?? '').trim();
+	s = s.replace(/^((re|fwd|fw|aw|sv|vs|vl|wg)\s*:\s*)+/i, '').trim();
+	const bracket = s.match(/^\[([^\]]{1,24})\]/);
+	if (bracket) return `[${bracket[1]}]`;
+	const colon = s.indexOf(':');
+	if (colon > 0 && colon <= 30 && s.slice(0, colon).trim().split(/\s+/).length <= 5) {
+		return s.slice(0, colon).trim() + ':';
+	}
+	const words = s.split(/\s+/).slice(0, 3).join(' ');
+	return words || '(no subject)';
+}
+
+function trunc(s: unknown, n: number): string {
+	const str = String(s ?? '').replace(/\s+/g, ' ').trim();
+	return str.length > n ? str.slice(0, n - 1) + '…' : str;
+}
+
+function mixLine(counts: Map<string, number>): string {
+	return [...counts.entries()]
+		.sort((a, b) => b[1] - a[1])
+		.map(([k, n]) => `${k}×${n}`)
+		.join(', ');
+}
+
 function out(s = '') {
 	console.log(s);
 }
@@ -147,12 +204,18 @@ for (const acc of accounts) {
 			)
 			.all(r.version_id) as any[];
 		const actMap = Object.fromEntries(act.map((a) => [a.status, a.n]));
+		const neverMatched =
+			verdictRows.length === 0 &&
+			(actMap['applied'] ?? 0) === 0 &&
+			(actMap['rolled_back'] ?? 0) === 0 &&
+			(actMap['failed'] ?? 0) === 0;
 
 		out(
 			`- **${r.name}** (v${r.version_no}, ${r.action}, ${r.status}): approval ${rate} ` +
 				`[✓${success} ✗${failure} ⊘${excluded} over ${windowed.length}] · ` +
 				`applied ${actMap['applied'] ?? 0} · rolled_back ${actMap['rolled_back'] ?? 0} · failed ${actMap['failed'] ?? 0}` +
-				(verdictRows.length > windowed.length ? ` · (lifetime ${verdictRows.length} verdicts)` : '')
+				(verdictRows.length > windowed.length ? ` · (lifetime ${verdictRows.length} verdicts)` : '') +
+				(neverMatched ? ' · ⚠ no verdicts yet (never matched, or proposals still pending review)' : '')
 		);
 	}
 	out();
@@ -236,36 +299,85 @@ for (const acc of accounts) {
 	// 4b. Undecided pool = unread, not TODO, no verdict on any rule version yet.
 	// Some of these may still be claimed by existing rules on the next run; focus
 	// on clusters that no current rule covers.
-	out('### 4b. Undecided pool clusters (unread · not TODO · no verdict yet)');
-	const undecidedClusters = db
+	out('### 4b. Undecided pool (unread · not TODO · no verdict yet)');
+	const pool = db
 		.query(
-			`SELECT from_domain, count(*) AS n,
-			        group_concat(subject, ' ⏐ ') AS subjects
+			`SELECT from_domain, subject, snippet, label_ids, received_at
 			 FROM threads t
 			 WHERE t.account_id = ?
 			   AND t.is_unread = 1
 			   AND (t.label_ids IS NULL OR t.label_ids NOT LIKE '%"TODO"%')
 			   AND t.id NOT IN (SELECT thread_id FROM verdicts WHERE account_id = ?)
-			 GROUP BY from_domain
-			 ORDER BY n DESC
-			 LIMIT 40`
+			 ORDER BY t.received_at DESC
+			 LIMIT 2000`
 		)
 		.all(acc, acc) as any[];
 
-	const totalUndecided = undecidedClusters.reduce((s, c) => s + c.n, 0);
-	if (!totalUndecided) {
+	if (!pool.length) {
 		out('_Pool is empty — everything unread has a verdict._');
 	} else {
-		out(`_${totalUndecided} undecided threads across ${undecidedClusters.length} domains (top 40):_`);
+		const ownDomain = acc.includes('@') ? acc.split('@')[1].toLowerCase() : '';
+		out(`_${pool.length} undecided threads._`);
 		out();
-		for (const c of undecidedClusters) {
-			const samples = String(c.subjects ?? '')
-				.split(' ⏐ ')
-				.filter(Boolean)
-				.slice(0, 3)
-				.map((s: string) => (s.length > 70 ? s.slice(0, 67) + '…' : s));
-			out(`- \`${c.from_domain}\` ×${c.n}`);
-			for (const s of samples) out(`    - ${s}`);
+
+		// Gmail-category mix — Promotions/Updates/Forums/Social are usually
+		// glance-and-clear, a strong archive/trash signal on their own.
+		const catMix = new Map<string, number>();
+		for (const r of pool) {
+			const c = categoryOf(parseLabels(r.label_ids));
+			catMix.set(c, (catMix.get(c) ?? 0) + 1);
+		}
+		out(`**By Gmail category:** ${mixLine(catMix)}`);
+		out('_(Promotions / Updates / Forums / Social are usually bulk-clearable; — = Primary/uncategorised.)_');
+		out();
+
+		// Recurring subject shapes — cross-domain look-alikes = rule candidates.
+		const sig = new Map<string, { n: number; cats: Map<string, number> }>();
+		for (const r of pool) {
+			const s = subjectSignature(r.subject);
+			if (!sig.has(s)) sig.set(s, { n: 0, cats: new Map() });
+			const e = sig.get(s)!;
+			e.n++;
+			const c = categoryOf(parseLabels(r.label_ids));
+			e.cats.set(c, (e.cats.get(c) ?? 0) + 1);
+		}
+		const sigRows = [...sig.entries()]
+			.filter(([, e]) => e.n >= 2)
+			.sort((a, b) => b[1].n - a[1].n)
+			.slice(0, 20);
+		if (sigRows.length) {
+			out('**Recurring subject shapes (≥2 — cross-domain rule candidates):**');
+			for (const [s, e] of sigRows) {
+				out(`- \`${trunc(s, 42)}\` ×${e.n}  · [${mixLine(e.cats)}]`);
+			}
+			out();
+		}
+
+		// By sender domain — each sample annotated with category · age · snippet
+		// so trash-vs-keep is judgeable without opening Gmail. Own domain flagged.
+		const byDom = new Map<string, any[]>();
+		for (const r of pool) {
+			if (!byDom.has(r.from_domain)) byDom.set(r.from_domain, []);
+			byDom.get(r.from_domain)!.push(r);
+		}
+		const domRows = [...byDom.entries()].sort((a, b) => b[1].length - a[1].length).slice(0, 40);
+		out(`**By sender domain (top ${domRows.length} of ${byDom.size}):**`);
+		for (const [dom, rows] of domRows) {
+			const own =
+				ownDomain && dom.toLowerCase().endsWith(ownDomain)
+					? ' ⚠ your own domain — heterogeneous, do not blanket'
+					: '';
+			const dcat = new Map<string, number>();
+			for (const r of rows) {
+				const c = categoryOf(parseLabels(r.label_ids));
+				dcat.set(c, (dcat.get(c) ?? 0) + 1);
+			}
+			out(`- \`${dom}\` ×${rows.length}  · [${mixLine(dcat)}]${own}`);
+			for (const r of rows.slice(0, 3)) {
+				const c = categoryOf(parseLabels(r.label_ids));
+				const snip = r.snippet ? ` — ${trunc(r.snippet, 72)}` : '';
+				out(`    - "${trunc(r.subject, 66)}"${snip} · [${c}·${ageDays(r.received_at)}d]`);
+			}
 		}
 	}
 	out();
