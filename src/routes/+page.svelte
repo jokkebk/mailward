@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import type { ProposalGroup, ThreadView } from '$lib/types/rules';
 	import { STORAGE_KEYS } from '$lib/constants';
+	import ThreadList from '$lib/components/ThreadList.svelte';
 
 	let accountId = $state<string | null>(null);
 	let accounts = $state<string[]>([]);
@@ -19,7 +20,7 @@
 	let saved = $state<Record<string, Set<string>>>({});
 	let deciding = $state<Record<string, boolean>>({});
 
-	// Collapse state for history runs.
+	// Collapse state for history runs (ThreadList owns its own expand state).
 	let expandedRuns = $state<Record<string, boolean>>({});
 
 	const actionLabel: Record<string, string> = {
@@ -211,9 +212,6 @@
 	function gmailLink(threadId: string) {
 		return `https://mail.google.com/mail/u/0/#inbox/${threadId}`;
 	}
-	function fmtAge(d: number) {
-		return d === 0 ? 'today' : d === 1 ? '1 day' : `${d} days`;
-	}
 </script>
 
 <div class="bar">
@@ -259,27 +257,21 @@
 				</div>
 			</div>
 			{#if g.intent}<p class="intent">{g.intent}</p>{/if}
-			<ul class="threads">
-				{#each g.threads as t (t.id)}
-					<li class:unchecked={!isChecked(g, t.id)}>
-						<input type="checkbox" checked={isChecked(g, t.id)} onchange={() => toggleCheck(g, t.id)} />
-						<div class="meta">
-							<span class="from">{t.from}</span>
-							<span class="subj">{t.subject ?? '(no subject)'}</span>
-							<span class="snip">{t.snippet}</span>
-						</div>
-						<span class="age">{fmtAge(t.ageDays)}</span>
-						{#if !isChecked(g, t.id)}
-							<button
-								class="save {isSaved(g, t.id) ? 'on' : ''}"
-								title="Save this one — right rule, not this instance (excluded from metrics)"
-								onclick={() => toggleSaved(g, t.id)}>★</button
-							>
-						{/if}
-						<a class="gmail" href={gmailLink(t.id)} target="_blank" rel="noreferrer">open</a>
-					</li>
-				{/each}
-			</ul>
+			<ThreadList items={g.threads} dim={(t) => !isChecked(g, t.id)}>
+				{#snippet lead(t)}
+					<input type="checkbox" checked={isChecked(g, t.id)} onchange={() => toggleCheck(g, t.id)} />
+				{/snippet}
+				{#snippet trail(t)}
+					{#if !isChecked(g, t.id)}
+						<button
+							class="save {isSaved(g, t.id) ? 'on' : ''}"
+							title="Save this one — right rule, not this instance (excluded from metrics)"
+							onclick={() => toggleSaved(g, t.id)}>★</button
+						>
+					{/if}
+					<a class="gmail" href={gmailLink(t.id)} target="_blank" rel="noreferrer">open</a>
+				{/snippet}
+			</ThreadList>
 		</section>
 	{/each}
 
@@ -290,22 +282,14 @@
 				<div><strong>Uncovered</strong> <span class="muted">· {leftovers.length} thread(s) no rule claimed</span></div>
 			</div>
 			<p class="intent">Handle manually (captured as training data), or open in Gmail for anything needing a reply.</p>
-			<ul class="threads">
-				{#each leftovers as t (t.id)}
-					<li>
-						<div class="meta">
-							<span class="from">{t.from}</span>
-							<span class="subj">{t.subject ?? '(no subject)'}</span>
-							<span class="snip">{t.snippet}</span>
-						</div>
-						<span class="age">{fmtAge(t.ageDays)}</span>
-						<button class="mini" onclick={() => leftoverAction(t, 'archive')}>Archive</button>
-						<button class="mini" onclick={() => leftoverAction(t, 'trash')}>Trash</button>
-						<button class="mini" onclick={() => leftoverAction(t, 'label_todo')}>TODO</button>
-						<a class="gmail" href={gmailLink(t.id)} target="_blank" rel="noreferrer">open</a>
-					</li>
-				{/each}
-			</ul>
+			<ThreadList items={leftovers}>
+				{#snippet trail(t)}
+					<button class="mini" onclick={() => leftoverAction(t, 'archive')}>Archive</button>
+					<button class="mini" onclick={() => leftoverAction(t, 'trash')}>Trash</button>
+					<button class="mini" onclick={() => leftoverAction(t, 'label_todo')}>TODO</button>
+					<a class="gmail" href={gmailLink(t.id)} target="_blank" rel="noreferrer">open</a>
+				{/snippet}
+			</ThreadList>
 		</section>
 	{/if}
 {:else if accountId && runId}
@@ -500,50 +484,6 @@
 	.muted {
 		color: #98a2b3;
 		font-size: 0.8rem;
-	}
-	ul.threads {
-		list-style: none;
-		margin: 0;
-		padding: 0;
-	}
-	ul.threads li {
-		display: flex;
-		align-items: center;
-		gap: 0.5rem;
-		padding: 0.4rem 0;
-		border-top: 1px solid #f2f4f7;
-	}
-	ul.threads li.unchecked {
-		opacity: 0.5;
-	}
-	.meta {
-		display: flex;
-		flex-direction: column;
-		flex: 1;
-		min-width: 0;
-	}
-	.from {
-		font-size: 0.78rem;
-		color: #475467;
-	}
-	.subj {
-		font-weight: 600;
-		font-size: 0.9rem;
-		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
-	}
-	.snip {
-		font-size: 0.78rem;
-		color: #98a2b3;
-		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
-	}
-	.age {
-		font-size: 0.75rem;
-		color: #98a2b3;
-		white-space: nowrap;
 	}
 	.save {
 		border: none;
