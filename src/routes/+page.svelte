@@ -17,6 +17,10 @@
 	// Per-group UI state, keyed by versionId.
 	let unchecked = $state<Record<string, Set<string>>>({});
 	let saved = $state<Record<string, Set<string>>>({});
+	let deciding = $state<Record<string, boolean>>({});
+
+	// Collapse state for history runs.
+	let expandedRuns = $state<Record<string, boolean>>({});
 
 	const actionLabel: Record<string, string> = {
 		archive: 'Archive',
@@ -130,6 +134,7 @@
 			body.suspend = confirm('Also SUSPEND this rule until you revise it?');
 		}
 
+		deciding = { ...deciding, [g.versionId]: true };
 		try {
 			const r = await api('/api/decisions', {
 				method: 'POST',
@@ -146,6 +151,8 @@
 			await loadHistory();
 		} catch (e) {
 			if ((e as Error).message !== 'reauth') status = `Error: ${(e as Error).message}`;
+		} finally {
+			deciding = { ...deciding, [g.versionId]: false };
 		}
 	}
 
@@ -235,7 +242,10 @@
 {#if accountId && (proposals.length || leftovers.length)}
 	<!-- Proposals -->
 	{#each proposals as g (g.versionId)}
-		<section class="card">
+		<section class="card" class:busy={deciding[g.versionId]}>
+			{#if deciding[g.versionId]}
+				<div class="overlay"><span class="spinner"></span> Applying…</div>
+			{/if}
 			<div class="card-head">
 				<div>
 					<span class="badge {g.action}">{actionLabel[g.action]}</span>
@@ -243,9 +253,9 @@
 					<span class="muted">· {g.threads.length} thread(s) · prio {g.priority}</span>
 				</div>
 				<div class="verbs">
-					<button class="btn primary" onclick={() => decide(g, 'approve')}>Approve</button>
-					<button class="btn" onclick={() => decide(g, 'amend')}>Amend</button>
-					<button class="btn danger" onclick={() => decide(g, 'reject')}>Reject</button>
+					<button class="btn primary" disabled={deciding[g.versionId]} onclick={() => decide(g, 'approve')}>Approve</button>
+					<button class="btn" disabled={deciding[g.versionId]} onclick={() => decide(g, 'amend')}>Amend</button>
+					<button class="btn danger" disabled={deciding[g.versionId]} onclick={() => decide(g, 'reject')}>Reject</button>
 				</div>
 			</div>
 			{#if g.intent}<p class="intent">{g.intent}</p>{/if}
@@ -309,22 +319,31 @@
 		{#each historyByRun as [rid, items]}
 			<div class="run">
 				<div class="run-head">
-					<span class="muted">Run {rid === 'manual' ? '(manual)' : rid.slice(0, 8)} · {items.length} action(s)</span>
+					<button
+						class="disclose"
+						aria-expanded={!!expandedRuns[rid]}
+						onclick={() => (expandedRuns = { ...expandedRuns, [rid]: !expandedRuns[rid] })}
+					>
+						<span class="arrow" class:open={expandedRuns[rid]}>▶</span>
+						<span class="muted">Run {rid === 'manual' ? '(manual)' : rid.slice(0, 8)} · {items.length} action(s)</span>
+					</button>
 					{#if rid !== 'manual'}
 						<button class="mini" onclick={() => undo('run', { runId: rid })}>Undo run</button>
 					{/if}
 				</div>
-				{#each items as a (a.id)}
-					<div class="hrow {a.status}">
-						<span class="badge {a.action}">{actionLabel[a.action] ?? a.action}</span>
-						<span class="muted">{a.ruleName ?? (a.mode === 'manual' ? 'manual' : '—')}</span>
-						<span class="tid">{a.threadId.slice(0, 10)}</span>
-						<span class="st">{a.status}{a.error ? `: ${a.error}` : ''}</span>
-						{#if a.status === 'applied'}
-							<button class="mini" onclick={() => undo('action', { actionId: a.id })}>Undo</button>
-						{/if}
-					</div>
-				{/each}
+				{#if expandedRuns[rid]}
+					{#each items as a (a.id)}
+						<div class="hrow {a.status}">
+							<span class="badge {a.action}">{actionLabel[a.action] ?? a.action}</span>
+							<span class="muted">{a.ruleName ?? (a.mode === 'manual' ? 'manual' : '—')}</span>
+							<span class="tid">{a.threadId.slice(0, 10)}</span>
+							<span class="st">{a.status}{a.error ? `: ${a.error}` : ''}</span>
+							{#if a.status === 'applied'}
+								<button class="mini" onclick={() => undo('action', { actionId: a.id })}>Undo</button>
+							{/if}
+						</div>
+					{/each}
+				{/if}
 			</div>
 		{/each}
 	</section>
@@ -387,12 +406,60 @@
 		margin-bottom: 1rem;
 	}
 	.card {
+		position: relative;
 		background: #fff;
 		border: 1px solid #e5e7eb;
 		border-radius: 10px;
 		padding: 0.85rem 1rem;
 		margin-bottom: 1rem;
 		box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+	}
+	.card.busy {
+		opacity: 0.85;
+	}
+	.overlay {
+		position: absolute;
+		inset: 0;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		gap: 0.5rem;
+		background: rgba(255, 255, 255, 0.6);
+		border-radius: 10px;
+		z-index: 2;
+		font-size: 0.85rem;
+		color: #475467;
+	}
+	.spinner {
+		width: 1.05rem;
+		height: 1.05rem;
+		border: 2px solid #c7d2fe;
+		border-top-color: #2f6df6;
+		border-radius: 50%;
+		animation: spin 0.7s linear infinite;
+	}
+	@keyframes spin {
+		to {
+			transform: rotate(360deg);
+		}
+	}
+	.disclose {
+		display: flex;
+		align-items: center;
+		gap: 0.4rem;
+		border: none;
+		background: none;
+		cursor: pointer;
+		padding: 0;
+		text-align: left;
+	}
+	.arrow {
+		color: #98a2b3;
+		font-size: 0.65rem;
+		transition: transform 0.12s ease;
+	}
+	.arrow.open {
+		transform: rotate(90deg);
 	}
 	.card-head {
 		display: flex;
