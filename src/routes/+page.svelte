@@ -246,12 +246,11 @@
 			{/if}
 			<div class="card-head">
 				<div>
-					<span class="badge {g.action}">{actionLabel[g.action]}</span>
 					<strong>{g.name}</strong>
 					<span class="muted">· {g.threads.length} thread(s) · prio {g.priority}</span>
 				</div>
 				<div class="verbs">
-					<button class="btn primary" disabled={deciding[g.versionId]} onclick={() => decide(g, 'approve')}>Approve</button>
+					<button class="btn approve {g.action}" disabled={deciding[g.versionId]} onclick={() => decide(g, 'approve')}>{actionLabel[g.action]} (Approve)</button>
 					<button class="btn" disabled={deciding[g.versionId]} onclick={() => decide(g, 'amend')}>Amend</button>
 					<button class="btn danger" disabled={deciding[g.versionId]} onclick={() => decide(g, 'reject')}>Reject</button>
 				</div>
@@ -359,6 +358,26 @@
 	.btn.primary {
 		background: #2f6df6;
 		border-color: #2f6df6;
+		color: #fff;
+	}
+	.btn.approve.trash {
+		background: #b42318;
+		border-color: #b42318;
+		color: #fff;
+	}
+	.btn.approve.archive {
+		background: #667085;
+		border-color: #667085;
+		color: #fff;
+	}
+	.btn.approve.label_todo {
+		background: #f5a623;
+		border-color: #f5a623;
+		color: #1d2330;
+	}
+	.btn.approve.mark_read {
+		background: #1d2330;
+		border-color: #1d2330;
 		color: #fff;
 	}
 	.btn.danger {
