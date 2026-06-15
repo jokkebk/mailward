@@ -11,6 +11,17 @@ function extractDomain(email: string): string {
 	return (parts.length > 1 ? parts[1] : email).trim().toLowerCase();
 }
 
+// Calendar invites/responses carry these subject prefixes (localised variants
+// exist, but English covers the bulk; the AI tier reads the body for the rest).
+const CALENDAR_SUBJECT_RE =
+	/^(invitation|updated invitation|accepted|declined|tentative|cancell?ed|canceled event):/i;
+
+/** Cheap calendar signal: a text/calendar part on the message, or a tell-tale subject. */
+function detectCalendarInvite(contentType: string, subject: string): boolean {
+	if (/text\/calendar/i.test(contentType)) return true;
+	return CALENDAR_SUBJECT_RE.test(subject.trim());
+}
+
 interface SyncResult {
 	syncedCount: number;
 	totalThreads: number;
@@ -53,12 +64,13 @@ export async function syncUnreadInbox(accountId: string): Promise<SyncResult> {
 			userId: 'me',
 			id: repId,
 			format: 'metadata',
-			metadataHeaders: ['From', 'To', 'Subject', 'Date']
+			metadataHeaders: ['From', 'To', 'Subject', 'Date', 'List-Unsubscribe', 'Content-Type']
 		});
 
 		const headers = full.data.payload?.headers || [];
-		const get = (n: string) => headers.find((h) => h.name === n)?.value || '';
+		const get = (n: string) => headers.find((h) => h.name?.toLowerCase() === n.toLowerCase())?.value || '';
 		const from = get('From');
+		const subject = get('Subject');
 		const dateHeader = get('Date');
 		const receivedAt = dateHeader ? new Date(dateHeader) : new Date(Number(full.data.internalDate));
 		const labelIds = JSON.stringify(full.data.labelIds || []);
@@ -68,13 +80,15 @@ export async function syncUnreadInbox(accountId: string): Promise<SyncResult> {
 			from,
 			fromDomain: extractDomain(from),
 			to: get('To'),
-			subject: get('Subject'),
+			subject,
 			snippet: full.data.snippet || '',
 			receivedAt,
 			isUnread: true,
 			labelIds,
 			messageIds: JSON.stringify(messageIds),
 			rawHeaders: JSON.stringify(headers),
+			hasUnsubscribe: Boolean(get('List-Unsubscribe').trim()),
+			isCalendarInvite: detectCalendarInvite(get('Content-Type'), subject),
 			syncedAt: new Date()
 		};
 

@@ -33,9 +33,19 @@ for (const acc of accounts) {
 		continue;
 	}
 
+	const fmtAction = (tier: string, stored: string) => {
+		if (tier !== 'ai') return stored;
+		try {
+			const arr = JSON.parse(stored);
+			return Array.isArray(arr) ? `[${arr.join(', ')}] (+leave)` : stored;
+		} catch {
+			return stored;
+		}
+	};
+
 	for (const r of rows) {
 		console.log(`## [${r.priority}] ${r.name}  (${r.status}, v${r.version_no}, ${r.tier})`);
-		console.log(`action: ${r.action}`);
+		console.log(`action: ${fmtAction(r.tier, r.action)}`);
 		if (r.intent) console.log(`intent: ${r.intent}`);
 		console.log(`match: ${r.match_criteria}`);
 		if (r.change_note) console.log(`note: ${r.change_note}`);

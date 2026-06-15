@@ -6,15 +6,15 @@ import {
 	recordVerdict,
 	suspendRule
 } from '$lib/server/triage/apply';
+import { getOpenProposal, rejectBatch, setProposalStatus } from '$lib/server/triage/proposals';
 import { handleReauthCleanup, reauthResponse } from '$lib/server/gmail/reauth';
-import type { RuleAction } from '$lib/types/rules';
+import type { Confidence, RuleAction } from '$lib/types/rules';
 import type { RequestHandler } from './$types';
 
 interface DecisionBody {
 	runId: string;
 	ruleId: string;
 	versionId: string;
-	action: RuleAction;
 	verb: 'approve' | 'amend' | 'reject';
 	apply?: string[]; // thread ids to act on
 	save?: string[]; // unchecked, "save this one" (metric-excluded)
@@ -29,7 +29,7 @@ export const POST: RequestHandler = async ({ url, request }) => {
 	if (accountId instanceof Response) return accountId;
 
 	const body = (await request.json()) as DecisionBody;
-	const { runId, ruleId, versionId, action, verb } = body;
+	const { runId, ruleId, versionId, verb } = body;
 
 	if (verb === 'reject' && !body.note?.trim()) {
 		return json({ error: 'A note is required when rejecting a batch.' }, { status: 400 });
@@ -43,31 +43,44 @@ export const POST: RequestHandler = async ({ url, request }) => {
 			for (const threadId of body.allThreadIds ?? []) {
 				await recordVerdict({ ...common, threadId, verdict: 'reject', note: body.note });
 			}
+			await rejectBatch({ accountId, runId, ruleId });
 			if (body.suspend) await suspendRule(accountId, ruleId);
 			return json({ ok: true, applied, suspended: Boolean(body.suspend) });
 		}
 
-		// approve / amend
+		// approve / amend — each thread's disposition comes from its persisted proposal,
+		// since a router rule's threads can carry different actions.
 		for (const threadId of body.apply ?? []) {
+			const prop = await getOpenProposal({ accountId, runId, ruleId, threadId });
+			if (!prop) {
+				applied.push({ threadId, status: 'failed', error: 'no open proposal' });
+				continue;
+			}
 			const outcome = await applyThreadAction({
 				...common,
 				threadId,
-				action,
+				action: prop.action as RuleAction,
 				mode: 'proposed',
-				source: 'deterministic',
+				source: prop.source as 'deterministic' | 'ai',
+				confidence: (prop.confidence as Confidence | null) ?? null,
 				verdict: verb,
 				note: body.note ?? null
 			});
 			applied.push(outcome);
 			if (outcome.status === 'applied') {
 				await recordApproveVerdict({ ...common, threadId });
+				await setProposalStatus(prop.id, 'applied');
 			}
 		}
 		for (const threadId of body.save ?? []) {
+			const prop = await getOpenProposal({ accountId, runId, ruleId, threadId });
 			await recordVerdict({ ...common, threadId, verdict: 'save' });
+			if (prop) await setProposalStatus(prop.id, 'skipped');
 		}
 		for (const threadId of body.skip ?? []) {
+			const prop = await getOpenProposal({ accountId, runId, ruleId, threadId });
 			await recordVerdict({ ...common, threadId, verdict: 'amend_skip', note: body.note });
+			if (prop) await setProposalStatus(prop.id, 'skipped');
 		}
 
 		const failed = applied.filter((a) => a.status === 'failed').length;

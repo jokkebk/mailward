@@ -82,6 +82,17 @@ function subjectSignature(subject: string | null): string {
 	return words || '(no subject)';
 }
 
+/** AI router rules store `action` as a JSON array of allowed dispositions. */
+function fmtAction(tier: string, stored: string): string {
+	if (tier !== 'ai') return stored;
+	try {
+		const arr = JSON.parse(stored);
+		return Array.isArray(arr) ? `${arr.join('/')} (+leave)` : stored;
+	} catch {
+		return stored;
+	}
+}
+
 function trunc(s: unknown, n: number): string {
 	const str = String(s ?? '').replace(/\s+/g, ' ').trim();
 	return str.length > n ? str.slice(0, n - 1) + '…' : str;
@@ -127,7 +138,7 @@ for (const acc of accounts) {
 		for (const r of ruleRows) {
 			out(`### [${r.priority}] ${r.name}`);
 			out(
-				`- rule_id: \`${r.rule_id}\` · status: **${r.status}** · v${r.version_no} (${r.created_by}) · ${r.tier} · action: **${r.action}**${r.needs_body ? ' · needs_body' : ''}`
+				`- rule_id: \`${r.rule_id}\` · status: **${r.status}** · v${r.version_no} (${r.created_by}) · ${r.tier} · action: **${fmtAction(r.tier, r.action)}**${r.needs_body ? ' · needs_body' : ''}`
 			);
 			if (r.intent) out(`- intent: ${r.intent}`);
 			out(`- match: \`${r.match_criteria}\``);
@@ -211,7 +222,7 @@ for (const acc of accounts) {
 			(actMap['failed'] ?? 0) === 0;
 
 		out(
-			`- **${r.name}** (v${r.version_no}, ${r.action}, ${r.status}): approval ${rate} ` +
+			`- **${r.name}** (v${r.version_no}, ${fmtAction(r.tier, r.action)}, ${r.status}): approval ${rate} ` +
 				`[✓${success} ✗${failure} ⊘${excluded} over ${windowed.length}] · ` +
 				`applied ${actMap['applied'] ?? 0} · rolled_back ${actMap['rolled_back'] ?? 0} · failed ${actMap['failed'] ?? 0}` +
 				(verdictRows.length > windowed.length ? ` · (lifetime ${verdictRows.length} verdicts)` : '') +

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import type { ProposalGroup, ThreadView } from '$lib/types/rules';
+	import type { Confidence, ProposalGroup, ProposalItem, RuleAction, ThreadView } from '$lib/types/rules';
 	import { STORAGE_KEYS } from '$lib/constants';
 	import ThreadList from '$lib/components/ThreadList.svelte';
 
@@ -29,6 +29,7 @@
 		label_todo: '→ TODO',
 		mark_read: 'Mark read'
 	};
+	const DISPOSITION_ORDER: RuleAction[] = ['trash', 'archive', 'label_todo'];
 
 	onMount(async () => {
 		const params = new URLSearchParams(location.search);
@@ -36,7 +37,10 @@
 		if (fromUrl) localStorage.setItem(STORAGE_KEYS.accountId, fromUrl);
 		accountId = fromUrl || localStorage.getItem(STORAGE_KEYS.accountId);
 		await loadAccounts();
-		if (accountId) await loadHistory();
+		if (accountId) {
+			await loadHistory();
+			await rehydrate();
+		}
 	});
 
 	async function loadAccounts() {
@@ -49,7 +53,50 @@
 		accountId = id;
 		localStorage.setItem(STORAGE_KEYS.accountId, id);
 		loadHistory();
+		rehydrate();
 	}
+
+	/** Restore the latest run's open proposals on load / account switch (no re-run). */
+	async function rehydrate() {
+		try {
+			const r = await api('/api/proposals');
+			if (!r.ok) return;
+			const data = await r.json();
+			runId = data.runId;
+			proposals = data.proposals ?? [];
+			leftovers = data.leftovers ?? [];
+			initChecks(proposals);
+		} catch {
+			/* reauth handled in api() */
+		}
+	}
+
+	/** Pre-check high/med, pre-uncheck low — approve-all does the safe thing. */
+	function initChecks(groups: ProposalGroup[]) {
+		const u: Record<string, Set<string>> = {};
+		for (const g of groups) {
+			const low = new Set(g.threads.filter((t) => t.confidence === 'low').map((t) => t.id));
+			if (low.size) u[g.versionId] = low;
+		}
+		unchecked = u;
+		saved = {};
+	}
+
+	/** Split a group's threads into per-disposition sub-lists (router rules fan out). */
+	function dispositionGroups(g: ProposalGroup): { action: RuleAction; items: ProposalItem[] }[] {
+		if (g.tier !== 'ai') return [{ action: g.action, items: g.threads }];
+		const byAction = new Map<RuleAction, ProposalItem[]>();
+		for (const t of g.threads) {
+			if (!byAction.has(t.action)) byAction.set(t.action, []);
+			byAction.get(t.action)!.push(t);
+		}
+		return DISPOSITION_ORDER.filter((a) => byAction.has(a)).map((a) => ({
+			action: a,
+			items: byAction.get(a)!
+		}));
+	}
+
+	const confidenceLabel: Record<Confidence, string> = { high: 'high', med: 'med', low: 'low' };
 
 	async function api(path: string, init?: RequestInit) {
 		const sep = path.includes('?') ? '&' : '?';
@@ -64,21 +111,21 @@
 		return r;
 	}
 
-	async function runTriage() {
+	async function runTriage(sync = true) {
 		if (!accountId) return;
 		running = true;
 		reauthNeeded = false;
-		status = 'Syncing and crunching…';
+		status = sync ? 'Syncing and crunching…' : 'Re-running rules…';
 		try {
-			const r = await api('/api/run', { method: 'POST' });
+			const r = await api(`/api/run?sync=${sync}`, { method: 'POST' });
 			const data = await r.json();
 			if (!r.ok) throw new Error(data.error || 'run failed');
 			runId = data.runId;
 			proposals = data.proposals;
 			leftovers = data.leftovers;
-			unchecked = {};
-			saved = {};
-			status = `Synced ${data.synced} threads · ${proposals.length} rule group(s) · ${leftovers.length} uncovered`;
+			initChecks(proposals);
+			const synced = data.synced === null ? 'No sync' : `Synced ${data.synced} threads`;
+			status = `${synced} · ${proposals.length} rule group(s) · ${leftovers.length} uncovered`;
 			await loadHistory();
 		} catch (e) {
 			if ((e as Error).message !== 'reauth') status = `Error: ${(e as Error).message}`;
@@ -114,7 +161,7 @@
 		const uncheckedSet = unchecked[g.versionId] ?? new Set();
 		const savedSet = saved[g.versionId] ?? new Set();
 
-		let body: any = { runId, ruleId: g.ruleId, versionId: g.versionId, action: g.action, verb };
+		let body: any = { runId, ruleId: g.ruleId, versionId: g.versionId, verb };
 
 		if (verb === 'approve') {
 			body.apply = all;
@@ -222,8 +269,11 @@
 	{/if}
 	<a class="btn ghost" href="/auth">{accountId ? 'Add / re-connect account' : 'Connect Gmail'}</a>
 	{#if accountId}
-		<button class="btn primary" onclick={runTriage} disabled={running}>
-			{running ? 'Running…' : 'Run triage'}
+		<button class="btn primary" onclick={() => runTriage(true)} disabled={running}>
+			{running ? 'Running…' : 'Fetch & analyze'}
+		</button>
+		<button class="btn" onclick={() => runTriage(false)} disabled={running} title="Re-run rules against the already-fetched threads (no Gmail fetch)">
+			Analyze only
 		</button>
 	{/if}
 </div>
@@ -247,30 +297,45 @@
 			<div class="card-head">
 				<div>
 					<strong>{g.name}</strong>
+					{#if g.tier === 'ai'}<span class="tier">AI</span>{/if}
 					<span class="muted">· {g.threads.length} thread(s) · prio {g.priority}</span>
 				</div>
 				<div class="verbs">
-					<button class="btn approve {g.action}" disabled={deciding[g.versionId]} onclick={() => decide(g, 'approve')}>{actionLabel[g.action]} (Approve)</button>
+					<button class="btn approve {g.tier === 'ai' ? 'ai' : g.action}" disabled={deciding[g.versionId]} onclick={() => decide(g, 'approve')}>
+						{g.tier === 'ai' ? 'Approve' : `${actionLabel[g.action]} (Approve)`}
+					</button>
 					<button class="btn" disabled={deciding[g.versionId]} onclick={() => decide(g, 'amend')}>Amend</button>
 					<button class="btn danger" disabled={deciding[g.versionId]} onclick={() => decide(g, 'reject')}>Reject</button>
 				</div>
 			</div>
 			{#if g.intent}<p class="intent">{g.intent}</p>{/if}
-			<ThreadList items={g.threads} dim={(t) => !isChecked(g, t.id)}>
-				{#snippet lead(t)}
-					<input type="checkbox" checked={isChecked(g, t.id)} onchange={() => toggleCheck(g, t.id)} />
-				{/snippet}
-				{#snippet trail(t)}
-					{#if !isChecked(g, t.id)}
-						<button
-							class="save {isSaved(g, t.id) ? 'on' : ''}"
-							title="Save this one — right rule, not this instance (excluded from metrics)"
-							onclick={() => toggleSaved(g, t.id)}>★</button
-						>
-					{/if}
-					<a class="gmail" href={gmailLink(t.id)} target="_blank" rel="noreferrer">open</a>
-				{/snippet}
-			</ThreadList>
+			{#each dispositionGroups(g) as sub (sub.action)}
+				{#if g.tier === 'ai'}
+					<div class="subhead">
+						<span class="badge {sub.action}">{actionLabel[sub.action]}</span>
+						<span class="muted">{sub.items.length}</span>
+					</div>
+				{/if}
+				<ThreadList items={sub.items} dim={(t) => !isChecked(g, t.id)}>
+					{#snippet lead(t)}
+						{@const it = t as ProposalItem}
+						<input type="checkbox" checked={isChecked(g, t.id)} onchange={() => toggleCheck(g, t.id)} />
+						{#if it.confidence}
+							<span class="conf {it.confidence}" title={it.reason ?? ''}>{confidenceLabel[it.confidence]}</span>
+						{/if}
+					{/snippet}
+					{#snippet trail(t)}
+						{#if !isChecked(g, t.id)}
+							<button
+								class="save {isSaved(g, t.id) ? 'on' : ''}"
+								title="Save this one — right rule, not this instance (excluded from metrics)"
+								onclick={() => toggleSaved(g, t.id)}>★</button
+							>
+						{/if}
+						<a class="gmail" href={gmailLink(t.id)} target="_blank" rel="noreferrer">open</a>
+					{/snippet}
+				</ThreadList>
+			{/each}
 		</section>
 	{/each}
 
@@ -378,6 +443,11 @@
 	.btn.approve.mark_read {
 		background: #1d2330;
 		border-color: #1d2330;
+		color: #fff;
+	}
+	.btn.approve.ai {
+		background: #2f6df6;
+		border-color: #2f6df6;
 		color: #fff;
 	}
 	.btn.danger {
@@ -503,6 +573,43 @@
 	.muted {
 		color: #98a2b3;
 		font-size: 0.8rem;
+	}
+	.tier {
+		font-size: 0.66rem;
+		font-weight: 700;
+		letter-spacing: 0.03em;
+		padding: 0.08rem 0.4rem;
+		border-radius: 999px;
+		background: #eef2ff;
+		color: #3538cd;
+		vertical-align: middle;
+	}
+	.subhead {
+		display: flex;
+		align-items: center;
+		gap: 0.35rem;
+		margin: 0.6rem 0 0.1rem;
+	}
+	.conf {
+		font-size: 0.62rem;
+		font-weight: 700;
+		text-transform: uppercase;
+		letter-spacing: 0.03em;
+		padding: 0.05rem 0.35rem;
+		border-radius: 999px;
+		cursor: help;
+	}
+	.conf.high {
+		background: #ecfdf3;
+		color: #027a48;
+	}
+	.conf.med {
+		background: #fffaeb;
+		color: #b54708;
+	}
+	.conf.low {
+		background: #fef3f2;
+		color: #b42318;
 	}
 	.save {
 		border: none;

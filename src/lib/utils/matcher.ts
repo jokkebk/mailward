@@ -19,7 +19,11 @@ function matchesCondition(thread: ThreadView, condition: Condition): boolean {
 		return condition.operator === 'has' ? has : !has;
 	}
 
-	return matchesString(thread, condition);
+	if (condition.field === 'hasUnsubscribe' || condition.field === 'isCalendarInvite') {
+		return Boolean(thread[condition.field]) === condition.value;
+	}
+
+	return matchesString(thread, condition as StringCondition);
 }
 
 function matchesString(thread: ThreadView, condition: StringCondition): boolean {

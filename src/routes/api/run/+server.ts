@@ -8,8 +8,10 @@ export const POST: RequestHandler = async ({ url }) => {
 	const accountId = getRequiredAccountId(url);
 	if (accountId instanceof Response) return accountId;
 
+	const sync = url.searchParams.get('sync') !== 'false';
+
 	try {
-		const result = await runTriage(accountId);
+		const result = await runTriage(accountId, { sync });
 		return json(result);
 	} catch (error) {
 		if (await handleReauthCleanup(error, accountId)) {

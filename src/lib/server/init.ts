@@ -35,6 +35,22 @@ function validateEnvironment() {
 	if (!existsSync('.env')) {
 		console.warn('\n⚠️  .env file not found. Using environment variables from system.\n');
 	}
+
+	// AI tier: warn (don't fail) if the chosen provider lacks its key — deterministic
+	// rules still work, and AI rules degrade gracefully (their batches stay uncovered).
+	const provider = (process.env.AI_PROVIDER || 'gemini').toLowerCase();
+	const providerKey: Record<string, string> = { gemini: 'GEMINI_API_KEY' };
+	const keyName = providerKey[provider];
+	if (keyName) {
+		const value = process.env[keyName];
+		if (!value || value.includes('your_') || value.includes('_here')) {
+			console.warn(
+				`\n⚠️  AI_PROVIDER='${provider}' but ${keyName} is unset — AI-tier rules will be skipped until you set it.\n`
+			);
+		}
+	} else {
+		console.warn(`\n⚠️  Unknown AI_PROVIDER='${provider}' (supported: gemini).\n`);
+	}
 }
 
 /**

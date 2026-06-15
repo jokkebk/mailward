@@ -39,6 +39,9 @@ export const threads = sqliteTable('threads', {
 	labelIds: text('label_ids'), // JSON array of the thread's current labels
 	messageIds: text('message_ids'), // JSON array of message ids in the thread
 	rawHeaders: text('raw_headers'), // JSON, latest message headers (debugging)
+	// Cheap computed signals (DESIGN.md §"Model payload"): prefilter inputs + AI payload.
+	hasUnsubscribe: integer('has_unsubscribe', { mode: 'boolean' }).default(false),
+	isCalendarInvite: integer('is_calendar_invite', { mode: 'boolean' }).default(false),
 	syncedAt: integer('synced_at', { mode: 'timestamp' }).notNull()
 });
 
@@ -69,7 +72,10 @@ export const ruleVersions = sqliteTable('rule_versions', {
 	priority: integer('priority').notNull(), // lowest number wins
 	matchCriteria: text('match_criteria').notNull(), // JSON (structured prefilter)
 	intent: text('intent'), // natural-language intent (used by AI tier later)
-	action: text('action').notNull(), // 'archive' | 'trash' | 'label_todo'
+	// Deterministic rules: a single action string ('archive'|'trash'|'label_todo').
+	// AI router rules: a JSON array of the dispositions the model may assign, e.g.
+	// '["trash","label_todo"]'. 'leave' (don't claim) is always implicit, never stored.
+	action: text('action').notNull(),
 	tier: text('tier').notNull().default('deterministic'), // 'deterministic' | 'ai'
 	needsBody: integer('needs_body', { mode: 'boolean' }).default(false),
 	createdBy: text('created_by').notNull().default('human'), // 'human' | 'skill'
@@ -148,4 +154,59 @@ export const verdicts = sqliteTable('verdicts', {
 		.$defaultFn(() => new Date())
 }, (t) => ({
 	threadVersionIdx: index('idx_verdicts_thread_version').on(t.threadId, t.ruleVersionId)
+}));
+
+/**
+ * Per-thread classification produced AT RUN TIME, before any decision. Unlike
+ * deterministic matches (recomputable for free), an AI verdict is expensive and
+ * non-deterministic, so it must be persisted: the review UI + apply read it here,
+ * reloads rehydrate from it, and a crash never loses intent (DESIGN.md lifecycle).
+ * One row per (run, rule, thread). A `leave` disposition produces NO row — the
+ * thread simply isn't claimed and falls through to lower-priority rules / uncovered.
+ */
+export const proposals = sqliteTable('proposals', {
+	id: text('id').primaryKey().$defaultFn(() => crypto.randomUUID()),
+	runId: text('run_id').references(() => runs.id),
+	accountId: text('account_id')
+		.notNull()
+		.references(() => tokens.id),
+	ruleId: text('rule_id').notNull(),
+	ruleVersionId: text('rule_version_id').notNull(),
+	threadId: text('thread_id').notNull(),
+	messageIds: text('message_ids'), // JSON
+	action: text('action').notNull(), // disposition: 'archive' | 'trash' | 'label_todo'
+	source: text('source').notNull(), // 'deterministic' | 'ai'
+	confidence: text('confidence'), // 'high' | 'med' | 'low' | null (deterministic)
+	reason: text('reason'), // model rationale (null for deterministic)
+	status: text('status').notNull().default('proposed'), // 'proposed'|'applied'|'skipped'|'rejected'|'superseded'
+	createdAt: integer('created_at', { mode: 'timestamp' })
+		.notNull()
+		.$defaultFn(() => new Date()),
+	decidedAt: integer('decided_at', { mode: 'timestamp' })
+}, (t) => ({
+	runIdx: index('idx_proposals_run').on(t.runId),
+	runRuleThreadIdx: index('idx_proposals_run_rule_thread').on(t.runId, t.ruleId, t.threadId)
+}));
+
+/**
+ * Per-(rule, disposition) promotion state. A router rule emits several dispositions;
+ * each graduates independently with its own bar (trash ~99%, archive/label looser).
+ * Reset to 'proposing' whenever a new rule version is created (must re-earn trust);
+ * the gate computes its window from `actions`/`verdicts` of the CURRENT version only.
+ */
+export const ruleDispositions = sqliteTable('rule_dispositions', {
+	id: text('id').primaryKey().$defaultFn(() => crypto.randomUUID()),
+	ruleId: text('rule_id')
+		.notNull()
+		.references(() => rules.id),
+	action: text('action').notNull(), // 'archive' | 'trash' | 'label_todo'
+	status: text('status').notNull().default('proposing'), // 'proposing' | 'auto' | 'suspended'
+	createdAt: integer('created_at', { mode: 'timestamp' })
+		.notNull()
+		.$defaultFn(() => new Date()),
+	updatedAt: integer('updated_at', { mode: 'timestamp' })
+		.notNull()
+		.$defaultFn(() => new Date())
+}, (t) => ({
+	ruleActionIdx: index('idx_rule_dispositions_rule_action').on(t.ruleId, t.action)
 }));

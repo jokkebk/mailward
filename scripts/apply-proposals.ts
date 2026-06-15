@@ -36,12 +36,14 @@
 import { Database } from 'bun:sqlite';
 
 type Action = 'archive' | 'trash' | 'label_todo';
+// Deterministic rules take a single action; AI router rules take a set (array).
+type ActionInput = Action | Action[];
 type Op =
 	| {
 			op: 'create';
 			name: string;
 			priority: number;
-			action: Action;
+			action: ActionInput;
 			matchCriteria: unknown;
 			intent?: string | null;
 			tier?: 'deterministic' | 'ai';
@@ -52,7 +54,7 @@ type Op =
 			op: 'edit';
 			ruleId: string;
 			priority?: number;
-			action?: Action;
+			action?: ActionInput;
 			matchCriteria?: unknown;
 			intent?: string | null;
 			tier?: 'deterministic' | 'ai';
@@ -87,6 +89,32 @@ const now = () => Math.floor(Date.now() / 1000);
 
 const VALID_ACTIONS: Action[] = ['archive', 'trash', 'label_todo'];
 
+const asActions = (a: ActionInput): Action[] => (Array.isArray(a) ? a : [a]);
+const allValid = (a: ActionInput): boolean => asActions(a).every((x) => VALID_ACTIONS.includes(x));
+/** Serialise for storage: scalar for deterministic, JSON array for AI router rules. */
+const serializeAction = (tier: string, a: ActionInput): string =>
+	tier === 'ai' ? JSON.stringify(asActions(a)) : asActions(a)[0];
+/** Parse a stored action column back to its allowed dispositions. */
+const parseStored = (tier: string, stored: string): Action[] => {
+	if (tier !== 'ai') return [stored as Action];
+	try {
+		const arr = JSON.parse(stored);
+		return Array.isArray(arr) && arr.length ? (arr as Action[]) : [stored as Action];
+	} catch {
+		return [stored as Action];
+	}
+};
+/** Reset (rule, disposition) promotion rows to the given allowed set, all 'proposing'. */
+function reseedDispositions(ruleId: string, actions: Action[], ts: number) {
+	db.query('DELETE FROM rule_dispositions WHERE rule_id = ?').run(ruleId);
+	for (const action of [...new Set(actions)]) {
+		db.query(
+			`INSERT INTO rule_dispositions (id, rule_id, action, status, created_at, updated_at)
+			 VALUES (?, ?, ?, 'proposing', ?, ?)`
+		).run(crypto.randomUUID(), ruleId, action, ts, ts);
+	}
+}
+
 function getRule(ruleId: string): any {
 	return db
 		.query('SELECT * FROM rules WHERE id = ? AND account_id = ?')
@@ -102,13 +130,13 @@ for (const [i, p] of doc.proposals.entries()) {
 	const tag = `#${i + 1} ${p.op}`;
 	if (p.op === 'create') {
 		if (!p.name?.trim()) throw new Error(`${tag}: name required`);
-		if (!VALID_ACTIONS.includes(p.action)) throw new Error(`${tag}: bad action ${p.action}`);
+		if (!allValid(p.action)) throw new Error(`${tag}: bad action ${JSON.stringify(p.action)}`);
 		if (!p.matchCriteria) throw new Error(`${tag}: matchCriteria required`);
-		plan.push(`${tag}: create "${p.name}" [${p.priority}] → ${p.action} (proposing, by skill)`);
+		plan.push(`${tag}: create "${p.name}" [${p.priority}] → ${asActions(p.action).join('/')} (proposing, by skill)`);
 	} else if (p.op === 'edit') {
 		const rule = getRule(p.ruleId);
 		if (!rule) throw new Error(`${tag}: rule ${p.ruleId} not found`);
-		if (p.action && !VALID_ACTIONS.includes(p.action)) throw new Error(`${tag}: bad action ${p.action}`);
+		if (p.action !== undefined && !allValid(p.action)) throw new Error(`${tag}: bad action ${JSON.stringify(p.action)}`);
 		const cur = getCurrentVersion(rule);
 		plan.push(
 			`${tag}: "${rule.name}" v${cur.version_no} → v${cur.version_no + 1} ` +
@@ -151,6 +179,7 @@ const apply = db.transaction(() => {
 			const ruleId = crypto.randomUUID();
 			const versionId = crypto.randomUUID();
 			const ts = now();
+			const tier = p.tier ?? 'deterministic';
 			db.query(
 				`INSERT INTO rules (id, account_id, name, status, current_version_id, created_at, updated_at)
 				 VALUES (?, ?, ?, 'proposing', ?, ?, ?)`
@@ -166,17 +195,23 @@ const apply = db.transaction(() => {
 				p.priority,
 				JSON.stringify(p.matchCriteria),
 				p.intent ?? null,
-				p.action,
-				p.tier ?? 'deterministic',
+				serializeAction(tier, p.action),
+				tier,
 				p.needsBody ? 1 : 0,
 				p.changeNote ?? 'created by analysis skill',
 				ts
 			);
+			reseedDispositions(ruleId, asActions(p.action), ts);
 		} else if (p.op === 'edit') {
 			const rule = getRule(p.ruleId);
 			const cur = getCurrentVersion(rule);
 			const versionId = crypto.randomUUID();
 			const ts = now();
+			const tier = p.tier ?? cur.tier;
+			const storedAction =
+				p.action !== undefined
+					? serializeAction(tier, p.action)
+					: serializeAction(tier, parseStored(cur.tier, cur.action));
 			db.query('UPDATE rule_versions SET is_current = 0 WHERE rule_id = ?').run(p.ruleId);
 			db.query(
 				`INSERT INTO rule_versions
@@ -190,22 +225,24 @@ const apply = db.transaction(() => {
 				p.priority ?? cur.priority,
 				p.matchCriteria !== undefined ? JSON.stringify(p.matchCriteria) : cur.match_criteria,
 				p.intent !== undefined ? p.intent : cur.intent,
-				p.action ?? cur.action,
-				p.tier ?? cur.tier,
+				storedAction,
+				tier,
 				p.needsBody !== undefined ? (p.needsBody ? 1 : 0) : cur.needs_body,
 				p.changeNote ?? 'edited by analysis skill',
 				ts
 			);
-			// Demote to proposing — a new version must re-earn trust.
+			// Demote to proposing — a new version must re-earn trust (rule + each disposition).
 			db.query(
 				`UPDATE rules SET current_version_id = ?, status = 'proposing', updated_at = ? WHERE id = ?`
 			).run(versionId, ts, p.ruleId);
+			reseedDispositions(p.ruleId, parseStored(tier, storedAction), ts);
 		} else if (p.op === 'suspend') {
 			db.query(`UPDATE rules SET status = 'suspended', updated_at = ? WHERE id = ?`).run(
 				now(),
 				p.ruleId
 			);
 		} else if (p.op === 'delete') {
+			db.query('DELETE FROM rule_dispositions WHERE rule_id = ?').run(p.ruleId);
 			db.query('DELETE FROM rule_versions WHERE rule_id = ?').run(p.ruleId);
 			db.query('DELETE FROM rules WHERE id = ?').run(p.ruleId);
 		}
