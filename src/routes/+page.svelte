@@ -23,6 +23,7 @@
 	let aiNotes = $state<Record<string, Record<string, string>>>({});
 	let noteOpen = $state<Record<string, Set<string>>>({});
 	let deciding = $state<Record<string, boolean>>({});
+	let ruleDispositionDialog = $state<RuleDispositionDialog | null>(null);
 
 	// Collapse state for history runs (ThreadList owns its own expand state).
 	let expandedRuns = $state<Record<string, boolean>>({});
@@ -44,6 +45,14 @@
 	const AI_REVIEW_CHOICES: AiDisposition[] = ['trash', 'archive', 'label_todo', 'skip', 'correct'];
 
 	type AiDisposition = RuleAction | 'skip' | 'correct';
+	type RuleDispositionDialog = {
+		ruleId: string;
+		versionId: string;
+		name: string;
+		currentAction: RuleAction;
+		action: RuleAction;
+		note: string;
+	};
 
 	onMount(async () => {
 		const params = new URLSearchParams(location.search);
@@ -283,6 +292,88 @@
 		noteOpen = { ...noteOpen, [g.versionId]: new Set() };
 	}
 
+	function openRuleDispositionDialog(g: ProposalGroup) {
+		if (g.tier === 'ai') return;
+		ruleDispositionDialog = {
+			ruleId: g.ruleId,
+			versionId: g.versionId,
+			name: g.name,
+			currentAction: g.action,
+			action: g.action,
+			note: ''
+		};
+	}
+
+	function closeRuleDispositionDialog() {
+		ruleDispositionDialog = null;
+	}
+
+	function setRuleDispositionAction(action: RuleAction) {
+		if (!ruleDispositionDialog) return;
+		ruleDispositionDialog = { ...ruleDispositionDialog, action };
+	}
+
+	function setRuleDispositionNote(note: string) {
+		if (!ruleDispositionDialog) return;
+		ruleDispositionDialog = { ...ruleDispositionDialog, note };
+	}
+
+	function moveVersionState(oldVersionId: string, newVersionId: string) {
+		const oldUnchecked = unchecked[oldVersionId];
+		const oldSaved = saved[oldVersionId];
+		const { [oldVersionId]: _u, ...restUnchecked } = unchecked;
+		const { [oldVersionId]: _s, ...restSaved } = saved;
+		const { [oldVersionId]: _d, ...restDeciding } = deciding;
+		unchecked = oldUnchecked ? { ...restUnchecked, [newVersionId]: oldUnchecked } : restUnchecked;
+		saved = oldSaved ? { ...restSaved, [newVersionId]: oldSaved } : restSaved;
+		deciding = restDeciding;
+	}
+
+	async function applyRuleDispositionChange() {
+		const dialog = ruleDispositionDialog;
+		if (!dialog || dialog.action === dialog.currentAction || !runId) return;
+
+		deciding = { ...deciding, [dialog.versionId]: true };
+		try {
+			const r = await api('/api/rules/disposition', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({
+					runId,
+					ruleId: dialog.ruleId,
+					versionId: dialog.versionId,
+					action: dialog.action,
+					note: dialog.note.trim() || null
+				})
+			});
+			const data = await r.json();
+			if (!r.ok) throw new Error(data.error || 'disposition change failed');
+			const newVersionId = data.versionId as string;
+			const action = data.action as RuleAction;
+			proposals = proposals.map((g) =>
+				g.versionId === dialog.versionId && g.ruleId === dialog.ruleId
+					? {
+							...g,
+							versionId: newVersionId,
+							action,
+							intent: data.intent ?? g.intent,
+							priority: data.priority ?? g.priority,
+							status: 'proposing',
+							threads: g.threads.map((t) => ({ ...t, action }))
+						}
+					: g
+			);
+			moveVersionState(dialog.versionId, newVersionId);
+			ruleDispositionDialog = null;
+			status = `Changed "${dialog.name}" to ${actionLabel[action]}. Apply the card when ready.`;
+		} catch (e) {
+			if ((e as Error).message !== 'reauth') status = `Error: ${(e as Error).message}`;
+		} finally {
+			const { [dialog.versionId]: _old, ...rest } = deciding;
+			deciding = rest;
+		}
+	}
+
 	async function applyReviewed(g: ProposalGroup) {
 		const missing = g.threads.filter((t) => aiChoice(g, t) === 'correct' && !aiNote(g, t.id).trim());
 		if (missing.length) {
@@ -514,6 +605,7 @@
 						<button class="btn approve {g.action}" disabled={deciding[g.versionId]} onclick={() => decide(g, 'approve')}>
 							{actionLabel[g.action]} (Approve)
 						</button>
+						<button class="btn" disabled={deciding[g.versionId]} onclick={() => openRuleDispositionDialog(g)}>Change disposition</button>
 						<button class="btn" disabled={deciding[g.versionId]} onclick={() => decide(g, 'amend')}>Amend</button>
 					{/if}
 					<button class="btn danger" disabled={deciding[g.versionId]} onclick={() => decide(g, 'reject')}>{g.tier === 'ai' ? 'Reject...' : 'Reject'}</button>
@@ -610,6 +702,50 @@
 	{/if}
 {:else if accountId && runId}
 	<p class="empty">✨ Inbox clear — nothing left to triage from the last run.</p>
+{/if}
+
+{#if ruleDispositionDialog}
+	<div class="modal-backdrop" role="presentation">
+		<div class="modal" role="dialog" aria-modal="true" aria-labelledby="rule-disposition-title">
+			<div class="modal-head">
+				<strong id="rule-disposition-title">Change rule disposition</strong>
+				<button class="icon-btn" aria-label="Close" onclick={closeRuleDispositionDialog}>×</button>
+			</div>
+			<p class="intent">
+				{ruleDispositionDialog.name} will recommend this disposition on the current card and future proposals.
+				No email is changed until you approve or amend the card.
+			</p>
+			<div class="disposition-picker" aria-label="New rule disposition">
+				{#each DISPOSITION_ORDER as action}
+					<button
+						class="pick {action}"
+						class:active={ruleDispositionDialog.action === action}
+						onclick={() => setRuleDispositionAction(action)}
+					>
+						{actionLabel[action]}
+					</button>
+				{/each}
+			</div>
+			<label class="note-label">
+				<span>Note</span>
+				<textarea
+					value={ruleDispositionDialog.note}
+					placeholder={`Optional: why ${actionLabel[ruleDispositionDialog.currentAction]} should become ${actionLabel[ruleDispositionDialog.action]}`}
+					oninput={(e) => setRuleDispositionNote((e.target as HTMLTextAreaElement).value)}
+				></textarea>
+			</label>
+			<div class="modal-actions">
+				<button class="btn" onclick={closeRuleDispositionDialog}>Cancel</button>
+				<button
+					class="btn primary"
+					disabled={ruleDispositionDialog.action === ruleDispositionDialog.currentAction || deciding[ruleDispositionDialog.versionId]}
+					onclick={applyRuleDispositionChange}
+				>
+					Apply
+				</button>
+			</div>
+		</div>
+	</div>
 {/if}
 
 <!-- History + rollback -->
@@ -713,6 +849,15 @@
 		opacity: 0.6;
 		cursor: default;
 	}
+	.icon-btn {
+		border: 0;
+		background: transparent;
+		color: #475467;
+		cursor: pointer;
+		font-size: 1.3rem;
+		line-height: 1;
+		padding: 0.1rem 0.25rem;
+	}
 	.status {
 		font-size: 0.85rem;
 		color: #475467;
@@ -727,6 +872,79 @@
 		padding: 0.75rem;
 		margin-bottom: 1rem;
 		font-size: 0.82rem;
+	}
+	.modal-backdrop {
+		position: fixed;
+		inset: 0;
+		z-index: 20;
+		display: grid;
+		place-items: center;
+		background: rgba(15, 23, 42, 0.34);
+		padding: 1rem;
+	}
+	.modal {
+		width: min(34rem, 100%);
+		background: #fff;
+		border: 1px solid #d0d5dd;
+		border-radius: 8px;
+		box-shadow: 0 18px 45px rgba(15, 23, 42, 0.2);
+		padding: 1rem;
+	}
+	.modal-head {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.75rem;
+		margin-bottom: 0.5rem;
+	}
+	.disposition-picker {
+		display: grid;
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+		gap: 0.5rem;
+		margin: 0.8rem 0;
+	}
+	.pick {
+		border: 1px solid #cfd4dc;
+		background: #fff;
+		border-radius: 6px;
+		padding: 0.55rem 0.6rem;
+		cursor: pointer;
+		font-size: 0.86rem;
+	}
+	.pick.active.archive {
+		background: #667085;
+		border-color: #667085;
+		color: #fff;
+	}
+	.pick.active.trash {
+		background: #b42318;
+		border-color: #b42318;
+		color: #fff;
+	}
+	.pick.active.label_todo {
+		background: #f5a623;
+		border-color: #f5a623;
+		color: #1d2330;
+	}
+	.note-label {
+		display: grid;
+		gap: 0.35rem;
+		color: #344054;
+		font-size: 0.84rem;
+	}
+	.note-label textarea {
+		min-height: 5rem;
+		resize: vertical;
+		border: 1px solid #d0d5dd;
+		border-radius: 6px;
+		padding: 0.55rem;
+		font: inherit;
+	}
+	.modal-actions {
+		display: flex;
+		justify-content: flex-end;
+		gap: 0.5rem;
+		margin-top: 0.9rem;
 	}
 	.progress-head {
 		display: flex;

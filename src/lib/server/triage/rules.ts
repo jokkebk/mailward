@@ -1,6 +1,6 @@
 import { db } from '../db';
-import { ruleDispositions, rules, ruleVersions } from '../db/schema';
-import { asc, eq } from 'drizzle-orm';
+import { proposals, ruleDispositions, rules, ruleVersions } from '../db/schema';
+import { and, asc, eq } from 'drizzle-orm';
 import type { MatchCriteria, ResolvedRule, RuleAction, RuleStatus, RuleTier } from '$lib/types/rules';
 
 /**
@@ -124,6 +124,101 @@ export async function createRule(accountId: string, input: NewRuleInput): Promis
 	await seedRuleDispositions(ruleId, allowedActions);
 
 	return ruleId;
+}
+
+interface ChangeDispositionInput {
+	accountId: string;
+	runId: string;
+	ruleId: string;
+	versionId: string;
+	action: RuleAction;
+	note?: string | null;
+}
+
+export interface ChangedRuleDisposition {
+	versionId: string;
+	versionNo: number;
+	action: RuleAction;
+	intent: string | null;
+	priority: number;
+}
+
+/**
+ * Change a deterministic rule's recommended disposition from an open proposal card.
+ * This appends a new rule version and re-points the still-open proposals in that
+ * card to the new version/action. It does not record verdicts or apply Gmail work.
+ */
+export async function changeDeterministicRuleDisposition(
+	input: ChangeDispositionInput
+): Promise<ChangedRuleDisposition> {
+	const rule = await db
+		.select()
+		.from(rules)
+		.where(and(eq(rules.id, input.ruleId), eq(rules.accountId, input.accountId)))
+		.get();
+	if (!rule) throw new Error('Rule not found');
+	if (rule.currentVersionId !== input.versionId) throw new Error('Rule version is no longer current');
+
+	const cur = await db
+		.select()
+		.from(ruleVersions)
+		.where(eq(ruleVersions.id, input.versionId))
+		.get();
+	if (!cur) throw new Error('Rule version not found');
+	if (cur.tier !== 'deterministic') throw new Error('Only deterministic rules support disposition changes');
+	if (cur.action === input.action) throw new Error('Choose a different disposition');
+
+	const newVersionId = crypto.randomUUID();
+	const now = new Date();
+	const versionNo = cur.versionNo + 1;
+	const note = input.note?.trim();
+	const changeNote =
+		note ||
+		`review: changed deterministic rule disposition from ${cur.action} to ${input.action}`;
+
+	await db.update(ruleVersions).set({ isCurrent: false }).where(eq(ruleVersions.ruleId, input.ruleId));
+	await db.insert(ruleVersions).values({
+		id: newVersionId,
+		ruleId: input.ruleId,
+		versionNo,
+		priority: cur.priority,
+		matchCriteria: cur.matchCriteria,
+		intent: cur.intent,
+		action: input.action,
+		tier: 'deterministic',
+		needsBody: cur.needsBody,
+		createdBy: 'human',
+		changeNote,
+		isCurrent: true,
+		createdAt: now
+	});
+	await db
+		.update(rules)
+		.set({ currentVersionId: newVersionId, status: 'proposing', updatedAt: now })
+		.where(eq(rules.id, input.ruleId));
+	await db.delete(ruleDispositions).where(eq(ruleDispositions.ruleId, input.ruleId));
+	await seedRuleDispositions(input.ruleId, [input.action]);
+
+	await db
+		.update(proposals)
+		.set({ ruleVersionId: newVersionId, action: input.action })
+		.where(
+			and(
+				eq(proposals.accountId, input.accountId),
+				eq(proposals.runId, input.runId),
+				eq(proposals.ruleId, input.ruleId),
+				eq(proposals.ruleVersionId, input.versionId),
+				eq(proposals.status, 'proposed')
+			)
+		);
+
+	return {
+		versionId: newVersionId,
+		versionNo,
+		action: input.action,
+		intent: cur.intent,
+		priority: cur.priority
+	};
 }
 
 /**

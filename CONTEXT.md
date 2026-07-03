@@ -36,6 +36,18 @@ _Avoid_: amend
 The intended handling outcome for a thread during review: Trash, Archive, TODO, Skip, or Correct. The first three mutate Gmail state; Skip and Correct leave the thread untouched.
 _Avoid_: action when referring to Skip or Correct
 
+**Rule disposition change**:
+A review-time decision on an open deterministic proposal card that the rule should recommend a different mutating disposition. It changes the rule's recommendation for the current card and future proposals, while the currently visible threads still require a separate apply decision; it is not itself negative feedback on the prior recommendation.
+_Avoid_: change action type, immediate apply
+
+**Rule disposition dialog**:
+The confirmation surface for a rule disposition change. It lets the user choose the deterministic rule's new mutating disposition and optionally explain the change before the current card is updated.
+_Avoid_: apply dialog, reject dialog
+
+**Current card**:
+The proposal card the user is reviewing right now. A rule disposition change may visually update the current card's recommended disposition and approve verb even when the stored rule definition changes by creating a new version.
+_Avoid_: stale proposal group
+
 **TODO**:
 A disposition for a thread that needs the user's attention, reading, reply, or decision. TODO is the correct choice when the user wants to be sure the thread remains visible for later handling.
 _Avoid_: read later, mark read

@@ -1,6 +1,8 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, mock, test } from 'bun:test';
 import { buildUserPrompt } from '../src/lib/server/ai/prompt';
 import { normalizeVerdicts, type ClassifyRequest } from '../src/lib/server/ai/classifier';
+
+mock.module('$env/dynamic/private', () => ({ env: process.env }));
 
 const req: ClassifyRequest = {
 	intent: 'Trash bare calendar responses; TODO invites needing a reply.',
@@ -98,5 +100,94 @@ describe('normalizeVerdicts', () => {
 		const out = normalizeVerdicts('not an array', req);
 		expect(out.map((v) => v.threadId).sort()).toEqual(['a', 'b']);
 		expect(out.every((v) => v.action === 'leave')).toBe(true);
+	});
+});
+
+async function withEnv<T>(name: string, value: string | undefined, fn: () => Promise<T>): Promise<T> {
+	const prev = process.env[name];
+	if (value === undefined) delete process.env[name];
+	else process.env[name] = value;
+	try {
+		return await fn();
+	} finally {
+		if (prev === undefined) delete process.env[name];
+		else process.env[name] = prev;
+	}
+}
+
+function fakeGeminiClient(calls: unknown[]): any {
+	return {
+		models: {
+			generateContent: async (input: unknown) => {
+				calls.push(input);
+				return {
+					text: JSON.stringify([
+						{ threadId: 'a', action: 'trash', confidence: 'high', reason: 'bare response' },
+						{ threadId: 'b', action: 'label_todo', confidence: 'med', reason: 'needs reply' }
+					]),
+					usageMetadata: {
+						promptTokenCount: 10,
+						candidatesTokenCount: 20,
+						totalTokenCount: 30
+					}
+				};
+			}
+		}
+	};
+}
+
+async function makeGeminiClassifier(client: any) {
+	const { GeminiClassifier } = await import('../src/lib/server/ai/gemini');
+	return new GeminiClassifier(client);
+}
+
+describe('GeminiClassifier', () => {
+	test('sends deterministic JSON config with thinking disabled by default', async () => {
+		await withEnv('GEMINI_THINKING_BUDGET', undefined, async () => {
+			const calls: unknown[] = [];
+			const classifier = await makeGeminiClassifier(fakeGeminiClient(calls));
+
+			await classifier.classify(req);
+
+			expect(calls).toHaveLength(1);
+			const call = calls[0] as any;
+			expect(call.config.temperature).toBe(0);
+			expect(call.config.responseMimeType).toBe('application/json');
+			expect(call.config.thinkingConfig).toEqual({ thinkingBudget: 0 });
+			expect(call.config.responseSchema.type).toBe('ARRAY');
+			expect(call.config.responseSchema.items.properties.action.enum).toEqual([
+				'trash',
+				'label_todo',
+				'leave'
+			]);
+		});
+	});
+
+	test('uses GEMINI_THINKING_BUDGET override', async () => {
+		await withEnv('GEMINI_THINKING_BUDGET', '256', async () => {
+			const calls: unknown[] = [];
+			const classifier = await makeGeminiClassifier(fakeGeminiClient(calls));
+
+			await classifier.classify(req);
+
+			const call = calls[0] as any;
+			expect(call.config.thinkingConfig).toEqual({ thinkingBudget: 256 });
+		});
+	});
+
+	test('rejects invalid GEMINI_THINKING_BUDGET values', async () => {
+		await withEnv('GEMINI_THINKING_BUDGET', 'abc', async () => {
+			const classifier = await makeGeminiClassifier(fakeGeminiClient([]));
+			await expect(classifier.classify(req)).rejects.toThrow(
+				'GEMINI_THINKING_BUDGET must be a non-negative integer'
+			);
+		});
+
+		await withEnv('GEMINI_THINKING_BUDGET', '-1', async () => {
+			const classifier = await makeGeminiClassifier(fakeGeminiClient([]));
+			await expect(classifier.classify(req)).rejects.toThrow(
+				'GEMINI_THINKING_BUDGET must be a non-negative integer'
+			);
+		});
 	});
 });

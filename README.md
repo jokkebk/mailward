@@ -31,7 +31,7 @@ Requires [Bun](https://bun.sh).
 ```bash
 bun install
 cp .env.example .env   # then fill in (see below)
-bun run dev            # http://localhost:5173
+bun run dev            # http://localhost:4873
 ```
 
 ### Google OAuth
@@ -41,10 +41,10 @@ bun run dev            # http://localhost:5173
    add your account under **Test users**. (Testing-status apps expire the refresh token
    ~weekly — Mailward detects this and shows a **Reauthorize** button.)
 3. Create OAuth 2.0 **Web application** credentials.
-4. Add redirect URI `http://localhost:5173/auth/callback`.
+4. Add redirect URI `http://localhost:4873/auth/callback`.
 5. Put the Client ID / Secret in `.env`.
 
-You can reuse the same Google project as mailnick — just add the `:5173` redirect URI.
+You can reuse the same Google project as mailnick — just add the `:4873` redirect URI.
 
 `GEMINI_API_KEY` is unused in v1 (no AI tier yet).
 

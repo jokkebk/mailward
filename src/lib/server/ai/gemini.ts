@@ -10,9 +10,22 @@ import {
 } from './classifier';
 import { SYSTEM_PROMPT, buildUserPrompt } from './prompt';
 
+export function geminiThinkingBudget(): number {
+	const raw = env.GEMINI_THINKING_BUDGET;
+	if (raw == null || raw === '') return 0;
+	if (!/^\d+$/.test(raw)) {
+		throw new Error('GEMINI_THINKING_BUDGET must be a non-negative integer');
+	}
+	return Number(raw);
+}
+
 /** Gemini implementation of the triage classifier (structured-output JSON). */
 export class GeminiClassifier implements Classifier {
 	#client: GoogleGenAI | null = null;
+
+	constructor(client?: GoogleGenAI) {
+		this.#client = client ?? null;
+	}
 
 	#getClient(): GoogleGenAI {
 		if (!this.#client) {
@@ -25,6 +38,7 @@ export class GeminiClassifier implements Classifier {
 
 	async classify(req: ClassifyRequest): Promise<ClassifyResult> {
 		const model = env.GEMINI_MODEL || 'gemini-2.5-flash';
+		const thinkingBudget = geminiThinkingBudget();
 		const prompt = buildUserPrompt(req);
 		if (req.threads.length === 0) {
 			return {
@@ -40,6 +54,7 @@ export class GeminiClassifier implements Classifier {
 			config: {
 				systemInstruction: SYSTEM_PROMPT,
 				temperature: 0,
+				thinkingConfig: { thinkingBudget },
 				responseMimeType: 'application/json',
 				responseSchema: {
 					type: Type.ARRAY,

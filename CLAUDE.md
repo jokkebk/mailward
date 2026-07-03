@@ -4,7 +4,7 @@ Email triage agent (the agentic successor to mailnick). You run it; it proposes
 trash/archive/TODO actions against versioned rules; you approve/amend/reject; proven
 rules graduate to auto-apply. All actions logged + reversible. See DESIGN.md.
 
-- **Dev server**: `bun run dev` (port 5173)
+- **Dev server**: `bun run dev` (port 4873)
 - **Database**: `./data/emails.db` (SQLite). One file = whole system state.
 - **Schema**: `src/lib/server/db/schema.ts` — snake_case columns. Key tables:
   `rules` (lineage + status), `rule_versions` (immutable defs), `runs`, `actions`
