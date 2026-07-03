@@ -5,7 +5,7 @@ export type RuleStatus = 'proposing' | 'auto' | 'suspended';
 export type RuleTier = 'deterministic' | 'ai';
 export type Confidence = 'high' | 'med' | 'low';
 
-export type StringField = 'from' | 'fromDomain' | 'to' | 'subject' | 'snippet';
+export type StringField = 'from' | 'fromDomain' | 'to' | 'routingRecipients' | 'subject' | 'snippet';
 export type StringOperator = 'equals' | 'contains' | 'startsWith' | 'endsWith' | 'in' | 'regex';
 export type BooleanField = 'hasUnsubscribe' | 'isCalendarInvite';
 
@@ -66,6 +66,7 @@ export interface ThreadView {
 	id: string;
 	from: string;
 	to: string;
+	routingRecipients: string;
 	fromDomain: string;
 	subject: string | null;
 	snippet: string | null;

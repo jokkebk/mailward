@@ -7,6 +7,7 @@ function thread(overrides: Partial<ThreadView> = {}): ThreadView {
 		id: 't1',
 		from: 'Acme <noreply@acme.com>',
 		to: 'me@example.com',
+		routingRecipients: 'me@example.com noreply@acme.com',
 		fromDomain: 'acme.com',
 		subject: 'Invitation: Standup @ 9am',
 		snippet: 'You are invited',
@@ -50,5 +51,16 @@ describe('matcher boolean fields', () => {
 			]
 		};
 		expect(matchesRule(thread(), c)).toBe(true);
+	});
+
+	test('matches derived routing recipients as a string field', () => {
+		const c: MatchCriteria = {
+			type: 'all',
+			conditions: [
+				{ field: 'routingRecipients', operator: 'contains', value: 'devs@acme.test' }
+			]
+		};
+		expect(matchesRule(thread({ routingRecipients: 'devs@acme.test noreply@example.com' }), c)).toBe(true);
+		expect(matchesRule(thread({ routingRecipients: 'noreply@example.com' }), c)).toBe(false);
 	});
 });
