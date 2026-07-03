@@ -225,6 +225,8 @@ actions       : action_id (PK), run_id, rule_id, rule_version_id, thread_id, mes
                 verdict (approve|amend_skip|reject|save|none), reject_reason, note,
                 created_at, applied_at, rolled_back_at, error
 verdicts/dedup: keyed on (thread_id, rule_version_id) so resolved threads aren't re-surfaced
+ai_classifications: keyed on (account_id, rule_version_id, thread_id), caches AI outcomes
+                including leave so reruns only classify newly seen candidates
 ```
 
 ## Build sequence

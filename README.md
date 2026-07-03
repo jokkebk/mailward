@@ -57,7 +57,7 @@ You can reuse the same Google project as mailnick — just add the `:4873` redir
 ## Layout
 
 - `src/lib/server/gmail/` — OAuth, token refresh, reauth detection, thread-level actions, sync
-- `src/lib/server/db/` — Drizzle schema (versioned rules, runs, actions, verdicts)
+- `src/lib/server/db/` — Drizzle schema (versioned rules, runs, actions, verdicts, AI cache)
 - `src/lib/server/triage/` — rule resolution + seed, the rule-centric run loop, apply/undo
 - `src/routes/api/` — run · decisions · leftover · undo · actions · rules
 - `scripts/rules.ts` — text dump of current rules (`bun run rules <accountId>`)

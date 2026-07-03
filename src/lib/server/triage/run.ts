@@ -1,6 +1,6 @@
 import { db } from '../db';
-import { runs, threads, verdicts } from '../db/schema';
-import { and, eq } from 'drizzle-orm';
+import { aiClassifications, runs, threads, verdicts } from '../db/schema';
+import { and, eq, inArray } from 'drizzle-orm';
 import { syncUnreadInbox } from '../gmail/sync';
 import { fetchMessageBody } from '../gmail/body';
 import { isReauthError } from '../gmail/errors';
@@ -13,9 +13,9 @@ import {
 	writeProposals,
 	type NewProposal
 } from './proposals';
-import { getClassifier, type ThreadPayload } from '../ai';
+import { getClassifier, type ClassifyVerdict, type ThreadPayload } from '../ai';
 import { AI_BATCH_SIZE, MAX_THREADS_PER_RUN } from '$lib/constants';
-import type { ProposalGroup, ResolvedRule, ThreadView } from '$lib/types/rules';
+import type { Confidence, Disposition, ProposalGroup, ResolvedRule, ThreadView } from '$lib/types/rules';
 import {
 	failStep,
 	finishStep,
@@ -76,6 +76,87 @@ function toPayload(v: ThreadView, body?: string): ThreadPayload {
 		hasUnsubscribe: v.hasUnsubscribe,
 		body
 	};
+}
+
+interface CachedAiClassification {
+	threadId: string;
+	action: Disposition;
+	confidence: Confidence;
+	reason: string | null;
+}
+
+async function loadCachedAiClassifications(
+	accountId: string,
+	ruleVersionId: string,
+	candidates: ThreadView[]
+): Promise<Map<string, CachedAiClassification>> {
+	const threadIds = candidates.map((v) => v.id);
+	if (threadIds.length === 0) return new Map();
+	const currentMessageIds = new Map(candidates.map((v) => [v.id, JSON.stringify(v.messageIds)]));
+	const out = new Map<string, CachedAiClassification>();
+	for (const ids of chunk(threadIds, 500)) {
+		const rows = await db
+			.select()
+			.from(aiClassifications)
+			.where(
+				and(
+					eq(aiClassifications.accountId, accountId),
+					eq(aiClassifications.ruleVersionId, ruleVersionId),
+					inArray(aiClassifications.threadId, ids)
+				)
+			)
+			.all();
+		for (const row of rows) {
+			if (row.messageIds !== currentMessageIds.get(row.threadId)) continue;
+			out.set(row.threadId, {
+				threadId: row.threadId,
+				action: row.action as Disposition,
+				confidence: row.confidence as Confidence,
+				reason: row.reason
+			});
+		}
+	}
+	return out;
+}
+
+async function writeAiClassificationCache(input: {
+	accountId: string;
+	runId: string;
+	rule: ResolvedRule;
+	views: Map<string, ThreadView>;
+	verdicts: ClassifyVerdict[];
+}): Promise<void> {
+	if (input.verdicts.length === 0) return;
+	const now = new Date();
+	const threadIds = input.verdicts.map((verdict) => verdict.threadId);
+	await db
+		.delete(aiClassifications)
+		.where(
+			and(
+				eq(aiClassifications.accountId, input.accountId),
+				eq(aiClassifications.ruleVersionId, input.rule.versionId),
+				inArray(aiClassifications.threadId, threadIds)
+			)
+		);
+	await db.insert(aiClassifications).values(
+		input.verdicts.map((verdict) => {
+			const view = input.views.get(verdict.threadId);
+			return {
+				id: crypto.randomUUID(),
+				accountId: input.accountId,
+				ruleId: input.rule.ruleId,
+				ruleVersionId: input.rule.versionId,
+				threadId: verdict.threadId,
+				messageIds: JSON.stringify(view?.messageIds ?? []),
+				action: verdict.action,
+				confidence: verdict.confidence,
+				reason: verdict.reason,
+				sourceRunId: input.runId,
+				createdAt: now,
+				updatedAt: now
+			};
+		})
+	);
 }
 
 export async function createTriageRun(accountId: string, sync: boolean): Promise<string> {
@@ -298,10 +379,42 @@ async function classifyRule(
 	const classifier = getClassifier();
 	const intent = rule.intent ?? rule.name;
 	const allowed = new Set(rule.allowedActions);
+	const cached = await loadCachedAiClassifications(
+		accountId,
+		rule.versionId,
+		candidates
+	);
+	const uncachedCandidates: ThreadView[] = [];
+	let cachedClaimed = 0;
+
+	for (const candidate of candidates) {
+		const verdict = cached.get(candidate.id);
+		if (!verdict) {
+			uncachedCandidates.push(candidate);
+			continue;
+		}
+		if (verdict.action === 'leave' || !allowed.has(verdict.action)) continue;
+		const view = pool.get(verdict.threadId);
+		if (!view) continue;
+		pool.delete(verdict.threadId);
+		cachedClaimed++;
+		collected.push({
+			runId,
+			accountId,
+			ruleId: rule.ruleId,
+			ruleVersionId: rule.versionId,
+			threadId: view.id,
+			messageIds: view.messageIds,
+			action: verdict.action,
+			source: 'ai',
+			confidence: verdict.confidence,
+			reason: verdict.reason
+		});
+	}
 
 	// Fetch bodies once (only when the rule declares it), keyed by thread.
 	const bodies = new Map<string, string>();
-	if (rule.needsBody) {
+	if (rule.needsBody && uncachedCandidates.length > 0) {
 		const bodyStep = await startStep({
 			runId,
 			accountId,
@@ -310,12 +423,17 @@ async function classifyRule(
 			ruleVersionId: rule.versionId,
 			ruleName: rule.name,
 			current: 0,
-			total: candidates.length,
-			metadata: { tier: rule.tier, needsBody: rule.needsBody, poolSize: candidates.length }
+			total: uncachedCandidates.length,
+			metadata: {
+				tier: rule.tier,
+				needsBody: rule.needsBody,
+				poolSize: candidates.length,
+				cacheHits: cached.size
+			}
 		});
 		let done = 0;
 		let fetched = 0;
-		await mapLimit(candidates, 6, async (v) => {
+		await mapLimit(uncachedCandidates, 6, async (v) => {
 			const messageId = v.messageIds[0];
 			if (messageId) {
 				let body = bodyCache.get(messageId);
@@ -327,17 +445,26 @@ async function classifyRule(
 				bodies.set(v.id, body);
 			}
 			done++;
-			await updateStep(bodyStep, { current: done, total: candidates.length, bodyFetchCount: fetched });
+			await updateStep(bodyStep, {
+				current: done,
+				total: uncachedCandidates.length,
+				bodyFetchCount: fetched
+			});
 		});
 		await finishStep(bodyStep, {
 			current: done,
-			total: candidates.length,
+			total: uncachedCandidates.length,
 			bodyFetchCount: fetched,
-			metadata: { tier: rule.tier, needsBody: rule.needsBody, cacheSize: bodyCache.size }
+			metadata: {
+				tier: rule.tier,
+				needsBody: rule.needsBody,
+				cacheSize: bodyCache.size,
+				cacheHits: cached.size
+			}
 		});
 	}
 
-	const batches = chunk(candidates, AI_BATCH_SIZE);
+	const batches = chunk(uncachedCandidates, AI_BATCH_SIZE);
 	for (const [index, batch] of batches.entries()) {
 		const batchIndex = index + 1;
 		const aiStep = await startStep({
@@ -352,7 +479,13 @@ async function classifyRule(
 			current: 0,
 			total: batch.length,
 			aiBatchCount: batches.length,
-			metadata: { tier: rule.tier, needsBody: rule.needsBody, poolSize: candidates.length }
+			metadata: {
+				tier: rule.tier,
+				needsBody: rule.needsBody,
+				poolSize: candidates.length,
+				cacheHits: cached.size,
+				cachedClaimed
+			}
 		});
 		const payloads = batch.map((v) => toPayload(v, bodies.get(v.id)));
 		const started = Date.now();
@@ -378,6 +511,14 @@ async function classifyRule(
 			await failStep(aiStep, err, { current: 0, total: batch.length });
 			continue;
 		}
+
+		await writeAiClassificationCache({
+			accountId,
+			runId,
+			rule,
+			views: new Map(batch.map((v) => [v.id, v])),
+			verdicts: result.verdicts
+		});
 
 		let claimed = 0;
 		for (const verdict of result.verdicts) {
@@ -417,7 +558,8 @@ async function classifyRule(
 			current: batch.length,
 			total: batch.length,
 			claimedCount: claimed,
-			aiBatchCount: batches.length
+			aiBatchCount: batches.length,
+			metadata: { cacheHits: cached.size, cachedClaimed }
 		});
 	}
 }

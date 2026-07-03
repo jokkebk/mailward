@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, index } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, text, integer, index, uniqueIndex } from 'drizzle-orm/sqlite-core';
 
 /**
  * Mailward schema.
@@ -171,6 +171,40 @@ export const aiCallLogs = sqliteTable('ai_call_logs', {
 }, (t) => ({
 	runIdx: index('idx_ai_call_logs_run').on(t.runId),
 	runRuleIdx: index('idx_ai_call_logs_run_rule').on(t.runId, t.ruleId)
+}));
+
+/**
+ * Stable per-thread AI classification cache keyed by the exact rule version.
+ * This is separate from proposals: proposals are the current review surface for
+ * one run, while this table prevents re-paying the model for the same
+ * (thread, rule version) outcome across later runs. Stores `leave` too.
+ */
+export const aiClassifications = sqliteTable('ai_classifications', {
+	id: text('id').primaryKey().$defaultFn(() => crypto.randomUUID()),
+	accountId: text('account_id')
+		.notNull()
+		.references(() => tokens.id),
+	ruleId: text('rule_id').notNull(),
+	ruleVersionId: text('rule_version_id').notNull(),
+	threadId: text('thread_id').notNull(),
+	messageIds: text('message_ids'),
+	action: text('action').notNull(), // 'archive' | 'trash' | 'label_todo' | 'leave'
+	confidence: text('confidence').notNull(), // 'high' | 'med' | 'low'
+	reason: text('reason'),
+	sourceRunId: text('source_run_id').references(() => runs.id),
+	createdAt: integer('created_at', { mode: 'timestamp' })
+		.notNull()
+		.$defaultFn(() => new Date()),
+	updatedAt: integer('updated_at', { mode: 'timestamp' })
+		.notNull()
+		.$defaultFn(() => new Date())
+}, (t) => ({
+	accountRuleThreadUniq: uniqueIndex('idx_ai_classifications_account_rule_thread').on(
+		t.accountId,
+		t.ruleVersionId,
+		t.threadId
+	),
+	ruleVersionIdx: index('idx_ai_classifications_rule_version').on(t.ruleVersionId)
 }));
 
 /** Unified, reversible action log. Batch = (runId, ruleId). */
