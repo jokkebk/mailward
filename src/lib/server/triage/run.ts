@@ -186,6 +186,7 @@ export async function runTriage(accountId: string, options: RunOptions = {}): Pr
 	const sync = options.sync ?? true;
 	const runId = options.runId ?? (await createTriageRun(accountId, sync));
 	const bodyCache = new Map<string, string>();
+	let selectedSyncThreadIds: Set<string> | null = null;
 
 	try {
 		const setupStep = await startStep({ runId, accountId, stage: 'setup' });
@@ -218,11 +219,16 @@ export async function runTriage(accountId: string, options: RunOptions = {}): Pr
 				}
 			});
 			syncedCount = syncResult.syncedCount;
+			selectedSyncThreadIds = new Set(syncResult.selectedThreadIds);
 			if (metadataStep) {
 				await finishStep(metadataStep, {
 					current: syncedCount,
 					total: Math.min(syncResult.totalThreads, MAX_THREADS_PER_RUN),
-					metadata: { syncedCount, totalThreads: syncResult.totalThreads }
+					metadata: {
+						syncedCount,
+						staleCount: syncResult.staleCount,
+						totalThreads: syncResult.totalThreads
+					}
 				});
 			}
 		}
@@ -239,6 +245,7 @@ export async function runTriage(accountId: string, options: RunOptions = {}): Pr
 		const pool = new Map<string, ThreadView>();
 		for (const row of rows) {
 			const view = toThreadView(row);
+			if (selectedSyncThreadIds && !selectedSyncThreadIds.has(view.id)) continue;
 			if (view.labelIds.includes('TODO')) continue; // already handled
 			pool.set(view.id, view);
 		}

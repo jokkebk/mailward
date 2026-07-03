@@ -24,6 +24,8 @@ function detectCalendarInvite(contentType: string, subject: string): boolean {
 
 interface SyncResult {
 	syncedCount: number;
+	staleCount: number;
+	selectedThreadIds: string[];
 	totalThreads: number;
 }
 
@@ -62,13 +64,18 @@ export async function syncUnreadInbox(accountId: string, options: SyncOptions = 
 	const gmail = await getGmailClient(accountId);
 
 	const query = `is:unread in:inbox newer_than:${SYNC_WINDOW_DAYS}d`;
-	const list = await gmail.users.messages.list({
-		userId: 'me',
-		q: query,
-		maxResults: MAX_THREADS_PER_RUN
-	});
-
-	const messages = list.data.messages || [];
+	const messages: { id?: string | null; threadId?: string | null }[] = [];
+	let pageToken: string | undefined;
+	do {
+		const list = await gmail.users.messages.list({
+			userId: 'me',
+			q: query,
+			maxResults: 500,
+			pageToken
+		});
+		messages.push(...(list.data.messages || []));
+		pageToken = list.data.nextPageToken ?? undefined;
+	} while (pageToken);
 
 	// Group message ids by thread, preserving list order (newest first).
 	const byThread = new Map<string, string[]>();
@@ -85,6 +92,7 @@ export async function syncUnreadInbox(accountId: string, options: SyncOptions = 
 	await options.onList?.(byThread.size);
 
 	const selectedThreadIds = threadOrder.slice(0, MAX_THREADS_PER_RUN);
+	const currentThreadIds = new Set(threadOrder);
 	let metadataDone = 0;
 	const rows = await mapLimit(selectedThreadIds, 6, async (threadId) => {
 		const messageIds = byThread.get(threadId)!;
@@ -143,5 +151,21 @@ export async function syncUnreadInbox(accountId: string, options: SyncOptions = 
 		syncedCount++;
 	}
 
-	return { syncedCount, totalThreads: byThread.size };
+	const now = new Date();
+	const staleRows = await db
+		.select({ id: threads.id })
+		.from(threads)
+		.where(and(eq(threads.accountId, accountId), eq(threads.isUnread, true)))
+		.all();
+	let staleCount = 0;
+	for (const row of staleRows) {
+		if (currentThreadIds.has(row.id)) continue;
+		await db
+			.update(threads)
+			.set({ isUnread: false, syncedAt: now })
+			.where(and(eq(threads.id, row.id), eq(threads.accountId, accountId)));
+		staleCount++;
+	}
+
+	return { syncedCount, staleCount, selectedThreadIds, totalThreads: byThread.size };
 }
