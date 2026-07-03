@@ -41,6 +41,13 @@
 		skip: 'Skip',
 		correct: 'Correct'
 	};
+	const applyAllLabel: Record<AiDisposition, string> = {
+		trash: 'Trash all',
+		archive: 'Archive all',
+		label_todo: 'Mark all TODO',
+		skip: 'Skip all',
+		correct: 'Correct all'
+	};
 	const DISPOSITION_ORDER: RuleAction[] = ['trash', 'archive', 'label_todo'];
 	const AI_REVIEW_CHOICES: AiDisposition[] = ['trash', 'archive', 'label_todo', 'skip', 'correct'];
 
@@ -290,6 +297,12 @@
 		};
 		aiNotes = { ...aiNotes, [g.versionId]: {} };
 		noteOpen = { ...noteOpen, [g.versionId]: new Set() };
+	}
+
+	function applyReviewedLabel(g: ProposalGroup) {
+		if (!g.threads.length) return 'Apply reviewed';
+		const first = aiChoice(g, g.threads[0]);
+		return g.threads.every((t) => aiChoice(g, t) === first) ? applyAllLabel[first] : 'Apply reviewed';
 	}
 
 	function openRuleDispositionDialog(g: ProposalGroup) {
@@ -599,7 +612,9 @@
 				</div>
 				<div class="verbs">
 					{#if g.tier === 'ai'}
-						<button class="btn primary" disabled={deciding[g.versionId]} onclick={() => applyReviewed(g)}>Apply reviewed</button>
+						<button class="btn primary" disabled={deciding[g.versionId]} onclick={() => applyReviewed(g)}>
+							{applyReviewedLabel(g)}
+						</button>
 						<button class="btn" disabled={deciding[g.versionId]} onclick={() => resetSuggestions(g)}>Reset suggestions</button>
 					{:else}
 						<button class="btn approve {g.action}" disabled={deciding[g.versionId]} onclick={() => decide(g, 'approve')}>
