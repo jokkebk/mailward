@@ -3,6 +3,7 @@
 	import type { Confidence, ProposalGroup, ProposalItem, RuleAction, ThreadView } from '$lib/types/rules';
 	import { STORAGE_KEYS } from '$lib/constants';
 	import ThreadList from '$lib/components/ThreadList.svelte';
+	import EmailViewModal from '$lib/components/EmailViewModal.svelte';
 
 	let accountId = $state<string | null>(null);
 	let accounts = $state<string[]>([]);
@@ -24,6 +25,7 @@
 	let noteOpen = $state<Record<string, Set<string>>>({});
 	let deciding = $state<Record<string, boolean>>({});
 	let ruleDispositionDialog = $state<RuleDispositionDialog | null>(null);
+	let viewingEmail = $state<ThreadView | null>(null);
 
 	// Collapse state for history runs (ThreadList owns its own expand state).
 	let expandedRuns = $state<Record<string, boolean>>({});
@@ -634,7 +636,11 @@
 						<span class="muted">{sub.items.length}</span>
 					</div>
 				{/if}
-				<ThreadList items={sub.items} dim={(t) => g.tier !== 'ai' && !isChecked(g, t.id)}>
+				<ThreadList
+					items={sub.items}
+					dim={(t) => g.tier !== 'ai' && !isChecked(g, t.id)}
+					onOpen={(t) => (viewingEmail = t)}
+				>
 					{#snippet lead(t)}
 						{@const it = t as ProposalItem}
 						{#if g.tier !== 'ai'}
@@ -705,7 +711,7 @@
 				<div><strong>Uncovered</strong> <span class="muted">· {leftovers.length} thread(s) no rule claimed</span></div>
 			</div>
 			<p class="intent">Handle manually (captured as training data), or open in Gmail for anything needing a reply.</p>
-			<ThreadList items={leftovers}>
+			<ThreadList items={leftovers} onOpen={(t) => (viewingEmail = t)}>
 				{#snippet trail(t)}
 					<button class="mini" onclick={() => leftoverAction(t, 'archive')}>Archive</button>
 					<button class="mini" onclick={() => leftoverAction(t, 'trash')}>Trash</button>
@@ -717,6 +723,10 @@
 	{/if}
 {:else if accountId && runId}
 	<p class="empty">✨ Inbox clear — nothing left to triage from the last run.</p>
+{/if}
+
+{#if viewingEmail && accountId}
+	<EmailViewModal thread={viewingEmail} {accountId} onClose={() => (viewingEmail = null)} />
 {/if}
 
 {#if ruleDispositionDialog}

@@ -7,7 +7,8 @@
 		limit = 10,
 		dim,
 		lead,
-		trail
+		trail,
+		onOpen
 	}: {
 		items: ThreadView[];
 		limit?: number;
@@ -17,6 +18,8 @@
 		lead?: Snippet<[ThreadView]>;
 		/** Rendered after the age (e.g. action buttons, gmail link). */
 		trail?: Snippet<[ThreadView]>;
+		/** Called when the from/subject/snippet block is clicked (e.g. open full email view). */
+		onOpen?: (t: ThreadView) => void;
 	} = $props();
 
 	let expanded = $state(false);
@@ -31,11 +34,19 @@
 		{#each expanded ? items : items.slice(0, limit) as t (t.id)}
 			<li class:unchecked={dim ? dim(t) : false}>
 				{#if lead}{@render lead(t)}{/if}
-				<div class="meta">
-					<span class="from">{t.from}</span>
-					<span class="subj">{t.subject ?? '(no subject)'}</span>
-					<span class="snip">{t.snippet}</span>
-				</div>
+				{#if onOpen}
+					<button class="meta clickable" onclick={() => onOpen(t)}>
+						<span class="from">{t.from}</span>
+						<span class="subj">{t.subject ?? '(no subject)'}</span>
+						<span class="snip">{t.snippet}</span>
+					</button>
+				{:else}
+					<div class="meta">
+						<span class="from">{t.from}</span>
+						<span class="subj">{t.subject ?? '(no subject)'}</span>
+						<span class="snip">{t.snippet}</span>
+					</div>
+				{/if}
 				<span class="age">{fmtAge(t.ageDays)}</span>
 				{#if trail}{@render trail(t)}{/if}
 			</li>
@@ -93,6 +104,19 @@
 		flex-direction: column;
 		flex: 1;
 		min-width: 0;
+	}
+	button.meta {
+		border: none;
+		background: none;
+		padding: 0;
+		text-align: left;
+		font: inherit;
+	}
+	button.meta.clickable {
+		cursor: pointer;
+	}
+	button.meta.clickable:hover .subj {
+		text-decoration: underline;
 	}
 	.from {
 		font-size: 0.78rem;
