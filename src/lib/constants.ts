@@ -1,5 +1,5 @@
-export const MAX_THREADS_PER_RUN = 200;
-export const SYNC_WINDOW_DAYS = 30; // how far back "unread in inbox" reaches
+export const MAX_THREADS_PER_RUN = 300;
+export const SYNC_WINDOW_DAYS = 28; // how far back "unread in inbox" reaches
 
 // AI tier: threads per classifier call (DESIGN.md §"The daily run" — ~10–20).
 export const AI_BATCH_SIZE = 15;
