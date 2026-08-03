@@ -1,6 +1,7 @@
 import { env } from '$env/dynamic/private';
 import type { Classifier } from './classifier';
 import { GeminiClassifier } from './gemini';
+import { OpenAIClassifier } from './openai';
 
 export type {
 	Classifier,
@@ -15,8 +16,8 @@ let cached: Classifier | null = null;
 
 /**
  * The active triage classifier, chosen by AI_PROVIDER (default 'gemini').
- * OpenAI ('chatgpt mini') and Anthropic ('haiku') are intended to drop in here
- * behind the same Classifier interface.
+ * Anthropic ('haiku') is intended to drop in here behind the same Classifier
+ * interface.
  */
 export function getClassifier(): Classifier {
 	if (cached) return cached;
@@ -25,10 +26,12 @@ export function getClassifier(): Classifier {
 		case 'gemini':
 			cached = new GeminiClassifier();
 			return cached;
-		// case 'openai':    cached = new OpenAIClassifier();    return cached;
+		case 'openai':
+			cached = new OpenAIClassifier();
+			return cached;
 		// case 'anthropic': cached = new AnthropicClassifier(); return cached;
 		default:
-			throw new Error(`Unknown AI_PROVIDER '${provider}' (supported: gemini)`);
+			throw new Error(`Unknown AI_PROVIDER '${provider}' (supported: gemini, openai)`);
 	}
 }
 

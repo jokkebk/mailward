@@ -40,7 +40,10 @@ function validateEnvironment() {
 	// AI tier: warn (don't fail) if the chosen provider lacks its key — deterministic
 	// rules still work, and AI rules degrade gracefully (their batches stay uncovered).
 	const provider = (process.env.AI_PROVIDER || 'gemini').toLowerCase();
-	const providerKey: Record<string, string> = { gemini: 'GEMINI_API_KEY' };
+	const providerKey: Record<string, string> = {
+		gemini: 'GEMINI_API_KEY',
+		openai: 'OPENAI_API_KEY'
+	};
 	const keyName = providerKey[provider];
 	if (keyName) {
 		const value = process.env[keyName];
@@ -50,7 +53,7 @@ function validateEnvironment() {
 			);
 		}
 	} else {
-		console.warn(`\n⚠️  Unknown AI_PROVIDER='${provider}' (supported: gemini).\n`);
+		console.warn(`\n⚠️  Unknown AI_PROVIDER='${provider}' (supported: gemini, openai).\n`);
 	}
 }
 
