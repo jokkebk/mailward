@@ -14,6 +14,7 @@ export type RunStepStage =
 	| 'rule_filter'
 	| 'body_fetch'
 	| 'ai_batch'
+	| 'auto_apply'
 	| 'write_proposals'
 	| 'finalize';
 

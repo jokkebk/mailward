@@ -1,14 +1,23 @@
 import { db } from '../db';
-import { actions, proposals, ruleDispositions, rules, verdicts } from '../db/schema';
-import { and, desc, eq } from 'drizzle-orm';
+import { actions, proposals, ruleDispositions, ruleVersions, rules, verdicts } from '../db/schema';
+import { and, asc, desc, eq, ne } from 'drizzle-orm';
 import { PROMOTION_GATE } from '$lib/constants';
-import type { Confidence, RuleAction, RuleStatus } from '$lib/types/rules';
+import { parseAllowedActions } from './rules';
+import type {
+	Confidence,
+	DispositionMetrics,
+	RuleAction,
+	RuleDispositionMetrics,
+	RuleStatus,
+	RuleTier
+} from '$lib/types/rules';
 
 /**
- * Per-(rule, disposition) promotion — the data model + helpers. The propose-only
- * tier ships first; this is the substrate the auto-apply path (separate phase)
- * builds on. Promotion is always suggest-and-confirm (DESIGN.md): these helpers
- * compute eligibility; only a human click sets status='auto'.
+ * Per-(rule, disposition) promotion. Promotion is always suggest-and-confirm
+ * (DESIGN.md): these helpers compute eligibility, the run loop reads the status,
+ * and only a human click sets status='auto'. A disposition can additionally be
+ * pinned `manual_only` — propose-only forever, whatever the metrics say — for
+ * actions the human always wants to approve *before* they happen.
  */
 
 export type AutoDecision = 'act' | 'act_flag' | 'propose';
@@ -29,19 +38,9 @@ export function autoDecision(
 	return 'act';
 }
 
-export interface DispositionMetrics {
-	ruleId: string;
-	action: RuleAction;
-	status: RuleStatus;
-	success: number;
-	failure: number;
-	excluded: number;
-	approvalPct: number | null;
-	applied: number;
-	rolledBack: number;
-	scored: number;
-	eligible: boolean;
-}
+// The gate's data shapes live in $lib/types/rules so the review UI can read them
+// without importing a server-only module.
+export type { DispositionMetrics, RuleDispositionMetrics } from '$lib/types/rules';
 
 /**
  * Compute the promotion-gate window for one (rule, disposition) over the CURRENT
@@ -57,7 +56,11 @@ export async function dispositionMetrics(
 	ruleId: string,
 	action: RuleAction
 ): Promise<DispositionMetrics> {
-	const rule = await db.select().from(rules).where(eq(rules.id, ruleId)).get();
+	const rule = await db
+		.select()
+		.from(rules)
+		.where(and(eq(rules.id, ruleId), eq(rules.accountId, accountId)))
+		.get();
 	const versionId = rule?.currentVersionId ?? '';
 	const dispRow = await db
 		.select()
@@ -65,12 +68,14 @@ export async function dispositionMetrics(
 		.where(and(eq(ruleDispositions.ruleId, ruleId), eq(ruleDispositions.action, action)))
 		.get();
 	const status = (dispRow?.status as RuleStatus) ?? 'proposing';
+	const manualOnly = Boolean(dispRow?.manualOnly);
 
 	const gate = PROMOTION_GATE[action];
 	const empty: DispositionMetrics = {
 		ruleId,
 		action,
 		status,
+		manualOnly,
 		success: 0,
 		failure: 0,
 		excluded: 0,
@@ -78,6 +83,9 @@ export async function dispositionMetrics(
 		applied: 0,
 		rolledBack: 0,
 		scored: 0,
+		leadingSuccessRun: 0,
+		minRun: gate.minRun,
+		minApprovalPct: gate.minApprovalPct,
 		eligible: false
 	};
 	if (!versionId) return empty;
@@ -107,8 +115,12 @@ export async function dispositionMetrics(
 		.orderBy(desc(verdicts.createdAt))
 		.all();
 
+	// Only HUMAN-approved actions count as gate successes: an auto-applied action
+	// is the gate's output, not evidence for it, so counting it would let a
+	// promoted disposition keep re-earning its own promotion. Auto rows still show
+	// in `applied` (what actually happened) and their rollbacks still count against.
 	const appliedRows = await db
-		.select({ id: actions.id, createdAt: actions.createdAt })
+		.select({ id: actions.id, createdAt: actions.createdAt, mode: actions.mode })
 		.from(actions)
 		.where(
 			and(
@@ -119,12 +131,12 @@ export async function dispositionMetrics(
 		)
 		.all();
 
-	const events: { outcome: 'success' | 'failure' | 'excluded'; createdAt: Date }[] = appliedRows.map(
-		(a) => ({
+	const events: { outcome: 'success' | 'failure' | 'excluded'; createdAt: Date }[] = appliedRows
+		.filter((a) => a.mode !== 'auto')
+		.map((a) => ({
 			outcome: 'success',
 			createdAt: a.createdAt
-		})
-	);
+		}));
 
 	for (const v of vrows) {
 		if (suggestedActionByThread.get(v.threadId) !== action) continue;
@@ -173,7 +185,9 @@ export async function dispositionMetrics(
 
 	const approvalPct = success + failure > 0 ? Math.round((success / (success + failure)) * 100) : null;
 	const eligible =
+		Boolean(dispRow) &&
 		status === 'proposing' &&
+		!manualOnly &&
 		rolledBack === 0 &&
 		leadingSuccessRun >= gate.minRun &&
 		approvalPct !== null &&
@@ -183,6 +197,7 @@ export async function dispositionMetrics(
 		ruleId,
 		action,
 		status,
+		manualOnly,
 		success,
 		failure,
 		excluded,
@@ -190,8 +205,70 @@ export async function dispositionMetrics(
 		applied: appliedRows.length,
 		rolledBack,
 		scored,
+		leadingSuccessRun,
+		minRun: gate.minRun,
+		minApprovalPct: gate.minApprovalPct,
 		eligible
 	};
+}
+
+/**
+ * Gate status for every (rule, disposition) of an account, in rule priority order.
+ * The promotion panel's read surface: which dispositions are auto, which are
+ * eligible to be turned on, and how far off the rest are.
+ */
+export async function listDispositionMetrics(accountId: string): Promise<RuleDispositionMetrics[]> {
+	const rows = await db
+		.select({
+			ruleId: rules.id,
+			ruleName: rules.name,
+			ruleStatus: rules.status,
+			action: ruleVersions.action,
+			tier: ruleVersions.tier,
+			priority: ruleVersions.priority
+		})
+		.from(rules)
+		.innerJoin(ruleVersions, eq(rules.currentVersionId, ruleVersions.id))
+		.where(eq(rules.accountId, accountId))
+		.orderBy(asc(ruleVersions.priority))
+		.all();
+
+	const out: RuleDispositionMetrics[] = [];
+	for (const r of rows) {
+		const tier = r.tier as RuleTier;
+		for (const action of parseAllowedActions(tier, r.action)) {
+			const metrics = await dispositionMetrics(accountId, r.ruleId, action);
+			out.push({
+				...metrics,
+				ruleName: r.ruleName,
+				ruleStatus: r.ruleStatus as RuleStatus,
+				tier,
+				priority: r.priority
+			});
+		}
+	}
+	return out;
+}
+
+/**
+ * The run loop's lookup: which (rule, disposition) pairs are live on auto.
+ * Keyed `${ruleId}::${action}`. A pinned or suspended rule never appears.
+ */
+export async function loadAutoDispositions(accountId: string): Promise<Set<string>> {
+	const rows = await db
+		.select({ ruleId: ruleDispositions.ruleId, action: ruleDispositions.action })
+		.from(ruleDispositions)
+		.innerJoin(rules, eq(ruleDispositions.ruleId, rules.id))
+		.where(
+			and(
+				eq(rules.accountId, accountId),
+				ne(rules.status, 'suspended'),
+				eq(ruleDispositions.status, 'auto'),
+				eq(ruleDispositions.manualOnly, false)
+			)
+		)
+		.all();
+	return new Set(rows.map((r) => `${r.ruleId}::${r.action}`));
 }
 
 export async function getDispositionStatus(ruleId: string, action: RuleAction): Promise<RuleStatus> {
@@ -203,15 +280,66 @@ export async function getDispositionStatus(ruleId: string, action: RuleAction): 
 	return (row?.status as RuleStatus) ?? 'proposing';
 }
 
-/** Suggest-and-confirm: a human click sets a disposition to 'auto' (or back). */
+/**
+ * Suggest-and-confirm: a human click sets a disposition to 'auto' (or back).
+ * Refuses to promote a pinned disposition, and re-checks the gate on the way up
+ * so the only path to 'auto' is one that actually earned it.
+ */
 export async function setDispositionStatus(
+	accountId: string,
 	ruleId: string,
 	action: RuleAction,
 	status: RuleStatus
 ): Promise<void> {
+	const rule = await db
+		.select({ id: rules.id })
+		.from(rules)
+		.where(and(eq(rules.id, ruleId), eq(rules.accountId, accountId)))
+		.get();
+	if (!rule) throw new Error('Rule not found for this account.');
+
+	const disposition = await db
+		.select({ id: ruleDispositions.id })
+		.from(ruleDispositions)
+		.where(and(eq(ruleDispositions.ruleId, ruleId), eq(ruleDispositions.action, action)))
+		.get();
+	if (!disposition) {
+		throw new Error('Disposition not found; apply the rule-disposition database migration first.');
+	}
+
+	if (status === 'auto') {
+		const metrics = await dispositionMetrics(accountId, ruleId, action);
+		if (metrics.manualOnly) {
+			throw new Error('This disposition is pinned to manual review and cannot auto-apply.');
+		}
+		if (!metrics.eligible) {
+			throw new Error(
+				`Not eligible for auto-apply yet: ${metrics.leadingSuccessRun}/${metrics.minRun} consecutive approvals at ${metrics.approvalPct ?? 0}% (needs ${metrics.minApprovalPct}%).`
+			);
+		}
+	}
 	await db
 		.update(ruleDispositions)
 		.set({ status, updatedAt: new Date() })
+		.where(and(eq(ruleDispositions.ruleId, ruleId), eq(ruleDispositions.action, action)));
+}
+
+/**
+ * Pin/unpin a disposition to propose-only. Pinning also demotes it out of 'auto'
+ * immediately — the point of the pin is "never act on this without asking me".
+ */
+export async function setDispositionManualOnly(
+	ruleId: string,
+	action: RuleAction,
+	manualOnly: boolean
+): Promise<void> {
+	await db
+		.update(ruleDispositions)
+		.set({
+			manualOnly,
+			...(manualOnly ? { status: 'proposing' as const } : {}),
+			updatedAt: new Date()
+		})
 		.where(and(eq(ruleDispositions.ruleId, ruleId), eq(ruleDispositions.action, action)));
 }
 

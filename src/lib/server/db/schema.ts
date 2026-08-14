@@ -306,6 +306,9 @@ export const ruleDispositions = sqliteTable('rule_dispositions', {
 		.references(() => rules.id),
 	action: text('action').notNull(), // 'archive' | 'trash' | 'label_todo'
 	status: text('status').notNull().default('proposing'), // 'proposing' | 'auto' | 'suspended'
+	// Pinned to propose-only: never auto-apply, however good the metrics look.
+	// For dispositions the human always wants to approve before they happen.
+	manualOnly: integer('manual_only', { mode: 'boolean' }).notNull().default(false),
 	createdAt: integer('created_at', { mode: 'timestamp' })
 		.notNull()
 		.$defaultFn(() => new Date()),

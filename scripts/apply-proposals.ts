@@ -119,14 +119,30 @@ const parseStored = (tier: string, stored: string): Action[] => {
 		return [stored as Action];
 	}
 };
-/** Reset (rule, disposition) promotion rows to the given allowed set, all 'proposing'. */
+/**
+ * Reset (rule, disposition) promotion rows to the given allowed set, all 'proposing'
+ * — a new version must re-earn trust. A `manual_only` pin is NOT trust to re-earn but
+ * a standing human instruction ("never act on this without asking me"), so it carries
+ * across the reseed; it survives an editing pass rather than being silently dropped.
+ */
 function reseedDispositions(ruleId: string, actions: Action[], ts: number) {
+	const pinned = new Set(
+		(
+			db
+				.query('SELECT action FROM rule_dispositions WHERE rule_id = ? AND manual_only = 1')
+				.all(ruleId) as { action: string }[]
+		).map((r) => r.action)
+	);
+	const pinnedAny = pinned.size > 0;
 	db.query('DELETE FROM rule_dispositions WHERE rule_id = ?').run(ruleId);
 	for (const action of [...new Set(actions)]) {
 		db.query(
-			`INSERT INTO rule_dispositions (id, rule_id, action, status, created_at, updated_at)
-			 VALUES (?, ?, ?, 'proposing', ?, ?)`
-		).run(crypto.randomUUID(), ruleId, action, ts, ts);
+			`INSERT INTO rule_dispositions (id, rule_id, action, status, manual_only, created_at, updated_at)
+			 VALUES (?, ?, ?, 'proposing', ?, ?, ?)`
+		).run(crypto.randomUUID(), ruleId, action, pinnedAny ? 1 : 0, ts, ts);
+	}
+	if (pinnedAny) {
+		console.log(`     ↳ kept manual-only pin (${[...pinned].join(', ')})`);
 	}
 }
 

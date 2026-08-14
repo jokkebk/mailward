@@ -87,6 +87,66 @@ export interface ProposalItem extends ThreadView {
 	reason: string | null;
 }
 
+/** One (rule, disposition)'s promotion-gate record, as read by the promotion panel. */
+export interface DispositionMetrics {
+	ruleId: string;
+	action: RuleAction;
+	status: RuleStatus;
+	/** Pinned propose-only: blocks promotion regardless of the numbers. */
+	manualOnly: boolean;
+	success: number;
+	failure: number;
+	excluded: number;
+	approvalPct: number | null;
+	applied: number;
+	rolledBack: number;
+	scored: number;
+	/** Longest leading run of approvals, the gate's "verbatim enough" signal. */
+	leadingSuccessRun: number;
+	/** Gate inputs, echoed so the UI can say "17 of 20". */
+	minRun: number;
+	minApprovalPct: number;
+	eligible: boolean;
+}
+
+export interface RuleDispositionMetrics extends DispositionMetrics {
+	ruleName: string;
+	ruleStatus: RuleStatus;
+	tier: RuleTier;
+	priority: number;
+}
+
+/**
+ * One thing that already happened without asking. The digest is a post-hoc
+ * receipt, so every row carries the `actionId` needed to undo it on its own.
+ */
+export interface AutoDigestItem {
+	actionId: string;
+	threadId: string;
+	from: string;
+	subject: string | null;
+	snippet: string | null;
+	receivedAt: number;
+	action: RuleAction;
+	confidence: Confidence | null;
+	reason: string | null;
+	status: 'applied' | 'rolled_back' | 'failed';
+	/** Acted on but low-confidence (autoDecision 'act_flag') — worth a glance. */
+	flagged: boolean;
+	error: string | null;
+}
+
+export interface AutoDigestGroup {
+	ruleId: string;
+	ruleName: string;
+	action: RuleAction;
+	applied: number;
+	flagged: number;
+	rolledBack: number;
+	failed: number;
+	items: AutoDigestItem[];
+}
+
 export interface ProposalGroup {
 	ruleId: string;
 	versionId: string;

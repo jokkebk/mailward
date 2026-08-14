@@ -77,13 +77,28 @@ export function serializeAction(tier: RuleTier, action: RuleAction | RuleAction[
 	return Array.isArray(action) ? action[0] : action;
 }
 
-/** Seed (rule, disposition) promotion rows — one per allowed action, status 'proposing'. */
-export async function seedRuleDispositions(ruleId: string, actions: RuleAction[]): Promise<void> {
+/**
+ * Seed (rule, disposition) promotion rows — one per allowed action, status 'proposing'.
+ * `manualOnly` carries a propose-only pin across a reseed: it is a standing human
+ * instruction, not trust that a new version has to re-earn.
+ */
+export async function seedRuleDispositions(
+	ruleId: string,
+	actions: RuleAction[],
+	manualOnly = false
+): Promise<void> {
 	const now = new Date();
 	const unique = [...new Set(actions)];
 	if (unique.length === 0) return;
 	await db.insert(ruleDispositions).values(
-		unique.map((action) => ({ ruleId, action, status: 'proposing' as const, createdAt: now, updatedAt: now }))
+		unique.map((action) => ({
+			ruleId,
+			action,
+			status: 'proposing' as const,
+			manualOnly,
+			createdAt: now,
+			updatedAt: now
+		}))
 	);
 }
 
@@ -196,8 +211,15 @@ export async function changeDeterministicRuleDisposition(
 		.update(rules)
 		.set({ currentVersionId: newVersionId, status: 'proposing', updatedAt: now })
 		.where(eq(rules.id, input.ruleId));
+	// A propose-only pin is a statement about the rule, so it follows the rule to its
+	// new disposition rather than being dropped when the action changes.
+	const pinned = await db
+		.select({ id: ruleDispositions.id })
+		.from(ruleDispositions)
+		.where(and(eq(ruleDispositions.ruleId, input.ruleId), eq(ruleDispositions.manualOnly, true)))
+		.get();
 	await db.delete(ruleDispositions).where(eq(ruleDispositions.ruleId, input.ruleId));
-	await seedRuleDispositions(input.ruleId, [input.action]);
+	await seedRuleDispositions(input.ruleId, [input.action], Boolean(pinned));
 
 	await db
 		.update(proposals)

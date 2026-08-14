@@ -1,6 +1,15 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import type { Confidence, ProposalGroup, ProposalItem, RuleAction, ThreadView } from '$lib/types/rules';
+	import type {
+		AutoDigestGroup,
+		AutoDigestItem,
+		Confidence,
+		ProposalGroup,
+		ProposalItem,
+		RuleAction,
+		RuleDispositionMetrics,
+		ThreadView
+	} from '$lib/types/rules';
 	import { STORAGE_KEYS } from '$lib/constants';
 	import ThreadList from '$lib/components/ThreadList.svelte';
 	import EmailViewModal from '$lib/components/EmailViewModal.svelte';
@@ -14,8 +23,15 @@
 
 	let runId = $state<string | null>(null);
 	let proposals = $state<ProposalGroup[]>([]);
+	let autoDigest = $state<AutoDigestGroup[]>([]);
 	let leftovers = $state<ThreadView[]>([]);
 	let history = $state<any[]>([]);
+
+	// Auto-apply: the "this was done" receipt + the promotion gate panel.
+	let digestOpen = $state<Record<string, boolean>>({});
+	let promotion = $state<RuleDispositionMetrics[]>([]);
+	let promotionOpen = $state(false);
+	let promotionBusy = $state<Record<string, boolean>>({});
 
 	// Per-group UI state, keyed by versionId.
 	let unchecked = $state<Record<string, Set<string>>>({});
@@ -72,6 +88,7 @@
 		if (accountId) {
 			await loadHistory();
 			await rehydrate();
+			await loadPromotion();
 		}
 	});
 
@@ -86,6 +103,7 @@
 		localStorage.setItem(STORAGE_KEYS.accountId, id);
 		loadHistory();
 		rehydrate();
+		loadPromotion();
 	}
 
 	/** Restore the latest run's open proposals on load / account switch (no re-run). */
@@ -96,12 +114,91 @@
 			const data = await r.json();
 			runId = data.runId;
 			proposals = data.proposals ?? [];
+			autoDigest = data.autoDigest ?? [];
 			leftovers = data.leftovers ?? [];
 			initChecks(proposals);
 		} catch {
 			/* reauth handled in api() */
 		}
 	}
+
+	/** Reload the auto-apply digest for the current run (after an undo). */
+	async function refreshAutoDigest() {
+		try {
+			const r = await api('/api/proposals');
+			if (r.ok) autoDigest = (await r.json()).autoDigest ?? [];
+		} catch {
+			/* reauth handled in api() */
+		}
+	}
+
+	async function loadPromotion() {
+		try {
+			const r = await api('/api/rules/promotion');
+			if (r.ok) promotion = (await r.json()).dispositions ?? [];
+		} catch {
+			/* reauth handled in api() */
+		}
+	}
+
+	function promotionKey(d: Pick<RuleDispositionMetrics, 'ruleId' | 'action'>) {
+		return `${d.ruleId}::${d.action}`;
+	}
+
+	/** The human's confirm click — the only path a disposition has to auto-apply. */
+	async function changePromotion(
+		d: RuleDispositionMetrics,
+		op: 'promote' | 'demote' | 'pin' | 'unpin'
+	) {
+		const key = promotionKey(d);
+		promotionBusy = { ...promotionBusy, [key]: true };
+		try {
+			const r = await api('/api/rules/promotion', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ ruleId: d.ruleId, action: d.action, op })
+			});
+			const data = await r.json();
+			if (!r.ok) throw new Error(data.error || 'promotion change failed');
+			promotion = data.dispositions ?? promotion;
+			const verb = {
+				promote: 'now auto-applies',
+				demote: 'back to propose-only',
+				pin: 'pinned to manual review',
+				unpin: 'unpinned'
+			}[op];
+			status = `${d.ruleName} · ${actionLabel[d.action]} — ${verb}.`;
+		} catch (e) {
+			if ((e as Error).message !== 'reauth') status = `Error: ${(e as Error).message}`;
+		} finally {
+			promotionBusy = { ...promotionBusy, [key]: false };
+		}
+	}
+
+	/** Undo one auto-applied action from the digest. */
+	async function undoAutoItem(item: AutoDigestItem) {
+		await undo('action', { actionId: item.actionId });
+		await refreshAutoDigest();
+		await loadPromotion();
+	}
+
+	/**
+	 * Undo a whole digest group. Deliberately per-action rather than scope:'batch' —
+	 * a router rule can have one disposition on auto and another still in review, so
+	 * a batch undo would also reverse actions this group never showed.
+	 */
+	async function undoAutoGroup(g: AutoDigestGroup) {
+		for (const it of g.items.filter((i) => i.status === 'applied')) {
+			await undo('action', { actionId: it.actionId });
+		}
+		await refreshAutoDigest();
+		await loadPromotion();
+	}
+
+	let autoDigestTotal = $derived(autoDigest.reduce((n, g) => n + g.applied, 0));
+	let autoDigestFlagged = $derived(autoDigest.reduce((n, g) => n + g.flagged + g.failed, 0));
+	let promotionEligible = $derived(promotion.filter((d) => d.eligible));
+	let promotionAuto = $derived(promotion.filter((d) => d.status === 'auto'));
 
 	/** Pre-check high/med, pre-uncheck low — approve-all does the safe thing. */
 	function initChecks(groups: ProposalGroup[]) {
@@ -145,6 +242,7 @@
 		rule_filter: 'Running rule filters',
 		body_fetch: 'Fetching message bodies',
 		ai_batch: 'Running AI classifier',
+		auto_apply: 'Applying auto-approved rules',
 		write_proposals: 'Writing proposals',
 		finalize: 'Finalizing'
 	};
@@ -206,10 +304,15 @@
 
 				if (progressData.status === 'completed') {
 					proposals = progressData.result?.proposals ?? [];
+					autoDigest = progressData.result?.autoDigest ?? [];
 					leftovers = progressData.result?.leftovers ?? [];
 					initChecks(proposals);
-					status = `Done · ${proposals.length} rule group(s) · ${leftovers.length} uncovered`;
+					const autoCount = autoDigest.reduce((n, g) => n + g.applied, 0);
+					status =
+						`Done · ${proposals.length} rule group(s) · ${leftovers.length} uncovered` +
+						(autoCount ? ` · ${autoCount} auto-applied` : '');
 					await loadHistory();
+					await loadPromotion();
 					break;
 				}
 				if (progressData.status === 'reauth_required') {
@@ -599,6 +702,74 @@
 	</div>
 {/if}
 
+<!-- Auto-apply receipt: already done, expand to review, undo anything wrong. -->
+{#if accountId && autoDigest.length}
+	<section class="card auto-digest">
+		<div class="card-head">
+			<div>
+				<strong>✅ Done automatically</strong>
+				<span class="muted">· {autoDigestTotal} thread(s) across {autoDigest.length} rule(s)</span>
+				{#if autoDigestFlagged}
+					<span class="badge flagged">{autoDigestFlagged} worth a look</span>
+				{/if}
+			</div>
+		</div>
+		<p class="intent">
+			These rules earned auto-apply, so they acted without asking. Nothing here needs a
+			decision — expand a rule if you want to check its work, and undo anything that was wrong.
+		</p>
+		{#each autoDigest as g (g.ruleId + g.action)}
+			<div class="digest-group">
+				<div class="digest-head">
+					<button
+						class="digest-toggle"
+						onclick={() => (digestOpen = { ...digestOpen, [g.ruleId + g.action]: !digestOpen[g.ruleId + g.action] })}
+					>
+						<span class="caret">{digestOpen[g.ruleId + g.action] ? '▾' : '▸'}</span>
+						<span class="badge {g.action}">{actionLabel[g.action]}</span>
+						<strong>{g.ruleName}</strong>
+						<span class="muted">· {g.applied} done</span>
+						{#if g.flagged}<span class="badge flagged">{g.flagged} low confidence</span>{/if}
+						{#if g.rolledBack}<span class="muted">· {g.rolledBack} undone</span>{/if}
+						{#if g.failed}<span class="badge failed">{g.failed} failed</span>{/if}
+					</button>
+					{#if g.applied}
+						<button class="mini" onclick={() => undoAutoGroup(g)}>Undo all {g.applied}</button>
+					{/if}
+				</div>
+				{#if digestOpen[g.ruleId + g.action]}
+					<ul class="digest-list">
+						{#each g.items as it (it.actionId)}
+							<li class:undone={it.status === 'rolled_back'} class:failed={it.status === 'failed'}>
+								<div class="digest-item">
+									<div class="digest-text">
+										<span class="from">{it.from}</span>
+										<span class="subject">{it.subject ?? '(no subject)'}</span>
+										{#if it.flagged && it.status === 'applied'}
+											<span class="badge flagged">low confidence</span>
+										{/if}
+										{#if it.status === 'rolled_back'}<span class="muted">· undone</span>{/if}
+										{#if it.status === 'failed'}
+											<span class="badge failed">failed{it.error ? `: ${it.error}` : ''}</span>
+										{/if}
+										{#if it.reason}<span class="reason">{it.reason}</span>{/if}
+									</div>
+									<div class="digest-actions">
+										{#if it.status === 'applied'}
+											<button class="mini" onclick={() => undoAutoItem(it)}>Undo</button>
+										{/if}
+										<a class="gmail" href={gmailLink(it.threadId)} target="_blank" rel="noreferrer">open</a>
+									</div>
+								</div>
+							</li>
+						{/each}
+					</ul>
+				{/if}
+			</div>
+		{/each}
+	</section>
+{/if}
+
 {#if accountId && (proposals.length || leftovers.length)}
 	<!-- Proposals -->
 	{#each proposals as g (g.versionId)}
@@ -774,6 +945,145 @@
 {/if}
 
 <!-- History + rollback -->
+<!-- Promotion gate: suggest-and-confirm. Only this panel can set a disposition to auto. -->
+{#if accountId && promotion.length}
+	<section class="card promotion">
+		<div class="card-head">
+			<div>
+				<strong>Auto-apply</strong>
+				<span class="muted">
+					· {promotionAuto.length} on
+					{#if promotionEligible.length}· {promotionEligible.length} ready{/if}
+				</span>
+			</div>
+			<button class="btn" onclick={() => (promotionOpen = !promotionOpen)}>
+				{promotionOpen ? 'Hide all rules' : 'Show all rules'}
+			</button>
+		</div>
+
+		{#if promotionEligible.length}
+			<p class="intent">
+				These have been approved verbatim long enough to earn auto-apply. Turn one on and it
+				stops asking — it acts, then reports in “Done automatically” where you can undo it.
+			</p>
+			{#each promotionEligible as d (promotionKey(d))}
+				<div class="promo-row ready">
+					<div class="promo-text">
+						<span class="badge {d.action}">{actionLabel[d.action]}</span>
+						<strong>{d.ruleName}</strong>
+						<span class="muted">
+							· {d.leadingSuccessRun} approvals in a row at {d.approvalPct}% (needs {d.minRun} at {d.minApprovalPct}%)
+						</span>
+					</div>
+					<div class="promo-actions">
+						<button
+							class="btn primary"
+							disabled={promotionBusy[promotionKey(d)]}
+							onclick={() => changePromotion(d, 'promote')}
+						>
+							Turn on auto-apply
+						</button>
+						<button
+							class="mini"
+							disabled={promotionBusy[promotionKey(d)]}
+							onclick={() => changePromotion(d, 'pin')}
+						>
+							Never auto
+						</button>
+					</div>
+				</div>
+			{/each}
+		{/if}
+
+		{#each promotionAuto as d (promotionKey(d))}
+			<div class="promo-row on">
+				<div class="promo-text">
+					<span class="badge {d.action}">{actionLabel[d.action]}</span>
+					<strong>{d.ruleName}</strong>
+					<span class="badge auto">auto</span>
+					<span class="muted">· {d.applied} applied{d.rolledBack ? `, ${d.rolledBack} undone` : ''}</span>
+				</div>
+				<div class="promo-actions">
+					<button
+						class="mini"
+						disabled={promotionBusy[promotionKey(d)]}
+						onclick={() => changePromotion(d, 'demote')}
+					>
+						Back to review
+					</button>
+					<button
+						class="mini"
+						disabled={promotionBusy[promotionKey(d)]}
+						onclick={() => changePromotion(d, 'pin')}
+					>
+						Never auto
+					</button>
+				</div>
+			</div>
+		{/each}
+
+		{#if promotionOpen}
+			<table class="promo-table">
+				<thead>
+					<tr>
+						<th>Rule</th>
+						<th>Disposition</th>
+						<th>Streak</th>
+						<th>Approval</th>
+						<th>State</th>
+						<th></th>
+					</tr>
+				</thead>
+				<tbody>
+					{#each promotion as d (promotionKey(d))}
+						<tr>
+							<td>{d.ruleName}</td>
+							<td><span class="badge {d.action}">{actionLabel[d.action]}</span></td>
+							<td class="num">{d.leadingSuccessRun}/{d.minRun}</td>
+							<td class="num">
+								{d.approvalPct == null ? '—' : `${d.approvalPct}%`}
+								<span class="muted">/{d.minApprovalPct}%</span>
+							</td>
+							<td>
+								{#if d.manualOnly}
+									<span class="badge pinned">manual only</span>
+								{:else if d.status === 'auto'}
+									<span class="badge auto">auto</span>
+								{:else if d.eligible}
+									<span class="badge flagged">ready</span>
+								{:else if d.ruleStatus === 'suspended'}
+									<span class="muted">suspended</span>
+								{:else}
+									<span class="muted">proposing</span>
+								{/if}
+							</td>
+							<td class="promo-actions">
+								{#if d.manualOnly}
+									<button
+										class="mini"
+										disabled={promotionBusy[promotionKey(d)]}
+										onclick={() => changePromotion(d, 'unpin')}
+									>
+										Allow auto
+									</button>
+								{:else}
+									<button
+										class="mini"
+									disabled={promotionBusy[promotionKey(d)]}
+										onclick={() => changePromotion(d, 'pin')}
+									>
+										Never auto
+									</button>
+								{/if}
+							</td>
+						</tr>
+					{/each}
+				</tbody>
+			</table>
+		{/if}
+	</section>
+{/if}
+
 {#if history.length}
 	<section class="card history">
 		<div class="card-head"><strong>History</strong></div>
@@ -1262,6 +1572,160 @@
 		text-align: center;
 		color: #667085;
 		padding: 2rem;
+	}
+
+	/* --- Auto-apply: the "done automatically" receipt --- */
+	.auto-digest {
+		border-color: #b2ddc3;
+		background: #f6fefa;
+	}
+	.badge.flagged {
+		background: #fffaeb;
+		color: #b54708;
+	}
+	.badge.failed {
+		background: #fef3f2;
+		color: #b42318;
+	}
+	.badge.auto {
+		background: #ecfdf3;
+		color: #027a48;
+	}
+	.badge.pinned {
+		background: #f2f4f7;
+		color: #475467;
+	}
+	.digest-group {
+		border-top: 1px solid #e3f2ea;
+		padding-top: 0.35rem;
+		margin-top: 0.35rem;
+	}
+	.digest-head {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.5rem;
+	}
+	.digest-toggle {
+		display: flex;
+		align-items: center;
+		gap: 0.35rem;
+		flex: 1;
+		border: none;
+		background: none;
+		padding: 0.2rem 0;
+		cursor: pointer;
+		font-size: 0.85rem;
+		text-align: left;
+	}
+	.caret {
+		color: #98a2b3;
+		width: 0.8rem;
+	}
+	.digest-list {
+		list-style: none;
+		margin: 0.3rem 0 0.2rem;
+		padding: 0;
+	}
+	.digest-list li {
+		border-top: 1px solid #f2f4f7;
+		padding: 0.3rem 0;
+	}
+	.digest-list li.undone {
+		opacity: 0.55;
+	}
+	.digest-list li.failed {
+		background: #fffbfa;
+	}
+	.digest-item {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.6rem;
+	}
+	.digest-text {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: baseline;
+		gap: 0.4rem;
+		min-width: 0;
+		font-size: 0.8rem;
+	}
+	.digest-text .from {
+		color: #475467;
+		font-weight: 600;
+		max-width: 14rem;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.digest-text .subject {
+		color: #101828;
+	}
+	.digest-text .reason {
+		color: #98a2b3;
+		font-style: italic;
+		flex-basis: 100%;
+	}
+	.digest-actions {
+		display: flex;
+		align-items: center;
+		gap: 0.4rem;
+		flex-shrink: 0;
+	}
+
+	/* --- Promotion gate --- */
+	.promo-row {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.6rem;
+		padding: 0.45rem 0.55rem;
+		border-radius: 8px;
+		margin-bottom: 0.35rem;
+		font-size: 0.85rem;
+	}
+	.promo-row.ready {
+		background: #fffaeb;
+		border: 1px solid #fedf89;
+	}
+	.promo-row.on {
+		background: #f6fefa;
+		border: 1px solid #d3f0e0;
+	}
+	.promo-text {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: baseline;
+		gap: 0.35rem;
+		min-width: 0;
+	}
+	.promo-actions {
+		display: flex;
+		align-items: center;
+		gap: 0.4rem;
+		flex-shrink: 0;
+	}
+	.promo-table {
+		width: 100%;
+		border-collapse: collapse;
+		font-size: 0.8rem;
+		margin-top: 0.6rem;
+	}
+	.promo-table th {
+		text-align: left;
+		color: #98a2b3;
+		font-weight: 600;
+		border-bottom: 1px solid #e5e7eb;
+		padding: 0.3rem 0.4rem;
+	}
+	.promo-table td {
+		border-bottom: 1px solid #f2f4f7;
+		padding: 0.3rem 0.4rem;
+	}
+	.promo-table td.num {
+		font-variant-numeric: tabular-nums;
+		white-space: nowrap;
 	}
 	.history .run {
 		margin-top: 0.6rem;

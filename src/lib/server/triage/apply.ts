@@ -228,6 +228,25 @@ export async function undoAction(accountId: string, actionId: string): Promise<A
 			.set({ isUnread: prior.isUnread, labelIds: JSON.stringify(prior.labelIds) })
 			.where(eq(threads.id, action.threadId));
 
+		// Undoing an AUTO action puts the thread back in the unread pool, where the
+		// same promoted rule would match and re-apply it on the next run — an undo
+		// the user can never win. Record a metric-excluded verdict so the run loop's
+		// dedup treats this (thread, version) as decided. The rollback itself is
+		// already the gate's failure signal, so this must not double-count as one.
+		if (action.mode === 'auto' && action.ruleId && action.ruleVersionId) {
+			await db.insert(verdicts).values({
+				accountId,
+				threadId: action.threadId,
+				ruleVersionId: action.ruleVersionId,
+				ruleId: action.ruleId,
+				runId: action.runId,
+				verdict: 'save',
+				excludeFromMetric: true,
+				note: 'undone by hand after auto-apply',
+				createdAt: new Date()
+			});
+		}
+
 		return { threadId: action.threadId, status: 'applied', actionId };
 	} catch (error) {
 		if ((error as { code?: string })?.code === 'reauth_required') throw error;

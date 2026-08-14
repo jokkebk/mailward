@@ -25,8 +25,16 @@ export interface NewProposal {
 	reason?: string | null;
 }
 
-/** Persist proposed classifications produced during a run (status='proposed'). */
-export async function writeProposals(rows: NewProposal[]): Promise<void> {
+/**
+ * Persist classifications produced during a run. Default status='proposed' (awaiting
+ * review); auto-applied ones are written as 'applied' so the proposal→action audit
+ * trail (and the model's reason, for the digest) survives without showing up in the
+ * review queue, which only ever reads 'proposed'.
+ */
+export async function writeProposals(
+	rows: NewProposal[],
+	status: 'proposed' | 'applied' = 'proposed'
+): Promise<void> {
 	if (rows.length === 0) return;
 	await db.insert(proposals).values(
 		rows.map((r) => ({
@@ -40,7 +48,8 @@ export async function writeProposals(rows: NewProposal[]): Promise<void> {
 			source: r.source,
 			confidence: r.confidence ?? null,
 			reason: r.reason ?? null,
-			status: 'proposed' as const,
+			status,
+			decidedAt: status === 'applied' ? new Date() : null,
 			createdAt: new Date()
 		}))
 	);

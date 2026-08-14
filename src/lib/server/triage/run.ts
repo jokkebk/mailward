@@ -13,9 +13,17 @@ import {
 	writeProposals,
 	type NewProposal
 } from './proposals';
+import { applyAutoActions, loadAutoDigest, partitionAutoApply } from './auto';
 import { getClassifier, type ClassifyVerdict, type ThreadPayload } from '../ai';
 import { AI_BATCH_SIZE, MAX_THREADS_PER_RUN } from '$lib/constants';
-import type { Confidence, Disposition, ProposalGroup, ResolvedRule, ThreadView } from '$lib/types/rules';
+import type {
+	AutoDigestGroup,
+	Confidence,
+	Disposition,
+	ProposalGroup,
+	ResolvedRule,
+	ThreadView
+} from '$lib/types/rules';
 import {
 	failStep,
 	finishStep,
@@ -28,7 +36,8 @@ import {
 export interface RunResult {
 	runId: string;
 	synced: number | null; // null when the sync step was skipped
-	autoDigest: unknown[]; // empty until auto-apply is wired
+	/** What promoted dispositions did without asking — the "this was done" receipt. */
+	autoDigest: AutoDigestGroup[];
 	proposals: ProposalGroup[];
 	leftovers: ThreadView[];
 }
@@ -337,15 +346,35 @@ export async function runTriage(accountId: string, options: RunOptions = {}): Pr
 			}
 		}
 
+		// Promoted dispositions act now and report afterwards; the rest queue for review.
+		const partition = await partitionAutoApply(accountId, collected);
+
+		const autoStep = await startStep({
+			runId,
+			accountId,
+			stage: 'auto_apply',
+			current: 0,
+			total: partition.auto.length
+		});
+		const autoResult = await applyAutoActions(accountId, runId, partition);
+		await finishStep(autoStep, {
+			current: partition.auto.length,
+			total: partition.auto.length,
+			metadata: { applied: autoResult.applied, failed: autoResult.failed }
+		});
+
 		const writeStep = await startStep({
 			runId,
 			accountId,
 			stage: 'write_proposals',
 			current: 0,
-			total: collected.length
+			total: partition.propose.length
 		});
-		await writeProposals(collected);
-		await finishStep(writeStep, { current: collected.length, total: collected.length });
+		await writeProposals(partition.propose);
+		await finishStep(writeStep, {
+			current: partition.propose.length,
+			total: partition.propose.length
+		});
 
 		const leftovers = [...pool.values()].sort((a, b) => b.receivedAt - a.receivedAt);
 
@@ -355,11 +384,17 @@ export async function runTriage(accountId: string, options: RunOptions = {}): Pr
 			.set({ status: 'completed', endedAt: new Date() })
 			.where(eq(runs.id, runId));
 		await finishStep(finalizeStep, {
-			metadata: { proposals: collected.length, leftovers: leftovers.length, syncedCount }
+			metadata: {
+				proposals: partition.propose.length,
+				autoApplied: autoResult.applied,
+				leftovers: leftovers.length,
+				syncedCount
+			}
 		});
 
 		const proposals = await loadOpenProposals(accountId, runId);
-		return { runId, synced: syncedCount, autoDigest: [], proposals, leftovers };
+		const autoDigest = await loadAutoDigest(accountId, runId);
+		return { runId, synced: syncedCount, autoDigest, proposals, leftovers };
 	} catch (error) {
 		await db
 			.update(runs)
