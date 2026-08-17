@@ -40,6 +40,8 @@
 	let aiNotes = $state<Record<string, Record<string, string>>>({});
 	let noteOpen = $state<Record<string, Set<string>>>({});
 	let deciding = $state<Record<string, boolean>>({});
+	// The rule prompt is reference material, not the task — keep it one click away.
+	let intentOpen = $state<Record<string, boolean>>({});
 	let ruleDispositionDialog = $state<RuleDispositionDialog | null>(null);
 	let viewingEmail = $state<ThreadView | null>(null);
 
@@ -260,6 +262,33 @@
 
 	function digestFor(rule: RuleFlowItem, d: RuleDispositionMetrics) {
 		return rule.digests.find((g) => g.action === d.action);
+	}
+
+	/** What still stands between a manual disposition and auto-apply, in words rather than ratios. */
+	function automationGap(d: RuleDispositionMetrics) {
+		const parts: string[] = [];
+		const runsLeft = Math.max(0, d.minRun - d.leadingSuccessRun);
+		if (runsLeft) parts.push(`${runsLeft} more clean approval${runsLeft === 1 ? '' : 's'} to automate`);
+		if ((d.approvalPct ?? 0) < d.minApprovalPct) parts.push(`${d.approvalPct ?? 0}% approved, needs ${d.minApprovalPct}%`);
+		if (d.rolledBack) parts.push(`${d.rolledBack} undone blocks automation`);
+		return parts.join(' · ') || `${d.leadingSuccessRun} of ${d.minRun} approvals in a row`;
+	}
+
+	/** The raw gate numbers, kept as a tooltip so the visible line stays readable. */
+	function automationDetail(d: RuleDispositionMetrics) {
+		return `${d.leadingSuccessRun} of ${d.minRun} consecutive approvals · ${d.approvalPct ?? 0}% approved (needs ${d.minApprovalPct}%)${d.rolledBack ? ` · ${d.rolledBack} undone` : ''}`;
+	}
+
+	/**
+	 * In the "this run" view a card only shows the dispositions that did something —
+	 * plus any that are eligible, since those carry the promote CTA.
+	 */
+	function visibleDispositions(rule: RuleFlowItem) {
+		if (ruleFilter !== 'current') return rule.dispositions;
+		const active = rule.dispositions.filter(
+			(d) => digestFor(rule, d)?.items.length || proposalCountFor(rule, d) || d.eligible
+		);
+		return active.length ? active : rule.dispositions;
 	}
 
 	/** A rule running purely on autopilot: nothing on the card asks for a decision. */
@@ -856,13 +885,14 @@
 	sentence per disposition, and only the two verbs that still make sense afterwards.
 -->
 {#snippet autoReceipt(rule: RuleFlowItem)}
-	{@const solo = rule.dispositions.length === 1}
+	{@const shown = visibleDispositions(rule)}
+	{@const solo = shown.length === 1}
 	{@const acted = rule.digests.some((g) => g.applied > 0)}
 	<section class="card receipt-card" class:idle={!acted}>
 		{#if !solo}
 			<div class="receipt-head"><strong>{rule.name}</strong> <span class="muted">· prio {rule.priority}</span></div>
 		{/if}
-		{#each rule.dispositions as d (promotionKey(d))}
+		{#each shown as d (promotionKey(d))}
 			{@const dg = digestFor(rule, d)}
 			{@const key = promotionKey(d)}
 			{@const n = dg?.applied ?? 0}
@@ -943,7 +973,7 @@
 			</div>
 
 			<div class="rule-modes">
-				{#each rule.dispositions as d (promotionKey(d))}
+				{#each visibleDispositions(rule) as d (promotionKey(d))}
 					{@const dg = digestFor(rule, d)}
 					{@const key = promotionKey(d)}
 					{@const proposalCount = proposalCountFor(rule, d)}
@@ -977,10 +1007,10 @@
 									<span class="muted">{proposalCount ? `${proposalCount} to review this run` : 'no email matched this run'}</span>
 								{:else if d.eligible}
 									<span class="badge ready">ready to automate</span>
-									<span class="muted">{proposalCount ? `${proposalCount} to review this run · ` : 'none this run · '}{d.leadingSuccessRun} approvals in a row · {d.approvalPct}% approved</span>
+									<span class="muted" title={automationDetail(d)}>{proposalCount ? `${proposalCount} to review this run · ` : 'none this run · '}{d.leadingSuccessRun} approvals in a row · {d.approvalPct}% approved</span>
 								{:else}
 									<span class="badge manual">manual review</span>
-									<span class="muted">{proposalCount ? `${proposalCount} this run · ` : 'none this run · '}{d.leadingSuccessRun}/{d.minRun} approval streak · {d.approvalPct ?? 0}/{d.minApprovalPct}%</span>
+									<span class="muted" title={automationDetail(d)}>{proposalCount ? `${proposalCount} to review this run · ` : 'none this run · '}{automationGap(d)}</span>
 								{/if}
 							</div>
 							<div class="mode-actions">
@@ -1010,8 +1040,20 @@
 
 			{#if g}
 				<div class="manual-review">
-					<p class="review-heading"><strong>Needs review</strong> <span class="muted">· {g.threads.length} thread(s)</span></p>
-					{#if g.intent}<p class="intent">{g.intent}</p>{/if}
+					<p class="review-heading">
+						<strong>Needs review</strong>
+						<span class="muted">· {g.threads.length} thread(s)</span>
+						{#if g.intent}
+							<button
+								class="link-btn"
+								aria-expanded={intentOpen[g.versionId] ?? false}
+								onclick={() => (intentOpen = { ...intentOpen, [g.versionId]: !intentOpen[g.versionId] })}
+							>
+								{intentOpen[g.versionId] ? 'Hide rule text' : 'What this rule does'}
+							</button>
+						{/if}
+					</p>
+					{#if g.intent && intentOpen[g.versionId]}<p class="intent">{g.intent}</p>{/if}
 					{#each dispositionGroups(g) as sub (sub.action)}
 						{#if g.tier === 'ai'}
 							<div class="subhead"><span class="badge {sub.action}">{actionLabel[sub.action]}</span><span class="muted">{sub.items.length}</span></div>
@@ -1802,6 +1844,15 @@
 		border-color: #cdeadb;
 		padding: 0.5rem 0.75rem;
 		margin-bottom: 0.5rem;
+	}
+	.link-btn {
+		border: none;
+		background: none;
+		padding: 0;
+		margin-left: 0.45rem;
+		color: #2f6df6;
+		font-size: 0.78rem;
+		cursor: pointer;
 	}
 	.receipt-card.idle {
 		background: #fff;
