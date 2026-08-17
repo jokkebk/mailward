@@ -52,6 +52,19 @@
 		label_todo: '→ TODO',
 		mark_read: 'Mark read'
 	};
+	// Auto-applied work is described as a finished sentence: "Automatically <verb> N emails<suffix>".
+	const autoVerb: Record<string, string> = {
+		archive: 'Archived',
+		trash: 'Trashed',
+		label_todo: 'Marked',
+		mark_read: 'Marked'
+	};
+	const autoSuffix: Record<string, string> = {
+		archive: '',
+		trash: '',
+		label_todo: ' as TODO',
+		mark_read: ' as read'
+	};
 	const reviewLabel: Record<AiDisposition, string> = {
 		trash: 'Trash',
 		archive: 'Archive',
@@ -252,6 +265,15 @@
 
 	function digestFor(rule: RuleFlowItem, d: RuleDispositionMetrics) {
 		return rule.digests.find((g) => g.action === d.action);
+	}
+
+	/** A rule running purely on autopilot: nothing on the card asks for a decision. */
+	function isAutoOnly(rule: RuleFlowItem) {
+		return (
+			!rule.proposal &&
+			rule.dispositions.length > 0 &&
+			rule.dispositions.every((d) => d.status === 'auto' && d.ruleStatus !== 'suspended')
+		);
 	}
 
 	function proposalCountFor(rule: RuleFlowItem, d: RuleDispositionMetrics) {
@@ -808,12 +830,97 @@
 	</div>
 {/if}
 
+{#snippet digestDetail(dg: AutoDigestGroup)}
+	<div class="digest-detail">
+		{#if dg.applied}<button class="mini undo-all" onclick={() => undoAutoGroup(dg)}>Undo all {dg.applied}</button>{/if}
+		<ul class="digest-list">
+			{#each dg.items as it (it.actionId)}
+				<li class:undone={it.status === 'rolled_back'} class:failed={it.status === 'failed'}>
+					<div class="digest-item">
+						<div class="digest-text">
+							<span class="from">{it.from}</span>
+							<span class="subject">{it.subject ?? '(no subject)'}</span>
+							{#if it.flagged && it.status === 'applied'}<span class="badge flagged">low confidence</span>{/if}
+							{#if it.status === 'rolled_back'}<span class="muted">undone</span>{/if}
+							{#if it.status === 'failed'}<span class="badge failed">failed{it.error ? `: ${it.error}` : ''}</span>{/if}
+							{#if it.reason}<span class="reason">{it.reason}</span>{/if}
+						</div>
+						<div class="digest-actions">
+							{#if it.status === 'applied'}<button class="mini" onclick={() => undoAutoItem(it)}>Undo</button>{/if}
+							<a class="gmail" href={gmailLink(it.threadId)} target="_blank" rel="noreferrer">open</a>
+						</div>
+					</div>
+				</li>
+			{/each}
+		</ul>
+	</div>
+{/snippet}
+
+<!--
+	A rule on autopilot has nothing to decide, so its card is a receipt: one past-tense
+	sentence per disposition, and only the two verbs that still make sense afterwards.
+-->
+{#snippet autoReceipt(rule: RuleFlowItem)}
+	{@const solo = rule.dispositions.length === 1}
+	{@const acted = rule.digests.some((g) => g.applied > 0)}
+	<section class="card receipt-card" class:idle={!acted}>
+		{#if !solo}
+			<div class="receipt-head"><strong>{rule.name}</strong> <span class="muted">· prio {rule.priority}</span></div>
+		{/if}
+		{#each rule.dispositions as d (promotionKey(d))}
+			{@const dg = digestFor(rule, d)}
+			{@const key = promotionKey(d)}
+			{@const n = dg?.applied ?? 0}
+			<div class="receipt">
+				<div class="receipt-row">
+					<p class="receipt-line" class:idle={!n}>
+						{#if n}
+							<span class="tick">✓</span>
+							<em>Automatically</em>
+							<strong class="verb {d.action}">{autoVerb[d.action]}</strong>
+							{n}
+							{n === 1 ? 'email' : 'emails'}{autoSuffix[d.action]}{#if solo}{' '}in
+								<strong>{rule.name}</strong> <span class="muted">(prio {rule.priority})</span>{/if}.
+						{:else if solo}
+							Nothing matched <strong>{rule.name}</strong>
+							<span class="muted">(prio {rule.priority})</span> this run.
+						{:else}
+							<span class="badge {d.action}">{actionLabel[d.action]}</span>
+							<span class="muted">nothing matched this run</span>
+						{/if}
+						{#if dg?.rolledBack}<span class="muted">· {dg.rolledBack} undone</span>{/if}
+						{#if dg?.flagged}<span class="badge flagged">{dg.flagged} check</span>{/if}
+						{#if dg?.failed}<span class="badge failed">{dg.failed} failed</span>{/if}
+					</p>
+					<div class="receipt-actions">
+						{#if dg?.items.length}
+							<button class="mini show" onclick={() => (digestOpen = { ...digestOpen, [key]: !digestOpen[key] })}>
+								{digestOpen[key] ? 'Hide' : 'Show'}
+							</button>
+						{/if}
+						<button class="mini" disabled={promotionBusy[key]} onclick={() => changePromotion(d, 'demote')}>Demote to manual</button>
+					</div>
+				</div>
+				{#if d.rolledBack}
+					<p class="mode-warning">Corrections detected — consider manual review</p>
+				{/if}
+				{#if dg && digestOpen[key]}
+					{@render digestDetail(dg)}
+				{/if}
+			</div>
+		{/each}
+	</section>
+{/snippet}
+
 {#if accountId && (ruleFlow.length || leftovers.length)}
 	<!-- One rule queue: priority order, regardless of auto/manual state. -->
 	{#if !visibleRuleFlow.length}
 		<p class="no-rule-hits">No rules in this view.</p>
 	{/if}
 	{#each visibleRuleFlow as rule (rule.ruleId)}
+		{#if isAutoOnly(rule)}
+			{@render autoReceipt(rule)}
+		{:else}
 		{@const g = rule.proposal}
 		<section class="card rule-card" class:busy={g ? deciding[g.versionId] : false}>
 			{#if g && deciding[g.versionId]}
@@ -845,18 +952,28 @@
 					{@const dg = digestFor(rule, d)}
 					{@const key = promotionKey(d)}
 					{@const proposalCount = proposalCountFor(rule, d)}
+					<!-- The receipt sentence already names the action, so it drops the leading badge. -->
+					{@const asReceipt = d.status === 'auto' && d.ruleStatus !== 'suspended' && Boolean(dg?.applied)}
 					<div class="rule-mode" class:auto={d.status === 'auto'} class:ready={d.eligible}>
 						<div class="mode-row">
 							<div class="mode-summary">
-								<span class="badge {d.action}">{actionLabel[d.action]}</span>
+								{#if !asReceipt}<span class="badge {d.action}">{actionLabel[d.action]}</span>{/if}
 								{#if d.ruleStatus === 'suspended'}
 									<span class="badge pinned">suspended</span>
 								{:else if d.status === 'auto'}
-									<span class="badge auto">automatic</span>
-									<span class="muted">
-										{dg ? `${dg.applied} applied this run` : 'no email matched this run'}
-										{dg?.rolledBack ? ` · ${dg.rolledBack} undone` : ''}
-									</span>
+									{#if dg?.applied}
+										<span class="receipt-line">
+											<span class="tick">✓</span>
+											<em>Automatically</em>
+											<strong class="verb {d.action}">{autoVerb[d.action]}</strong>
+											{dg.applied}
+											{dg.applied === 1 ? 'email' : 'emails'}{autoSuffix[d.action]} this run.
+										</span>
+									{:else}
+										<span class="badge {d.action}">{actionLabel[d.action]}</span>
+										<span class="muted">automatic · nothing matched this run</span>
+									{/if}
+									{#if dg?.rolledBack}<span class="muted">· {dg.rolledBack} undone</span>{/if}
 									{#if dg?.flagged}<span class="badge flagged">{dg.flagged} check</span>{/if}
 									{#if dg?.failed}<span class="badge failed">{dg.failed} failed</span>{/if}
 									{#if d.rolledBack}<span class="mode-warning">Corrections detected — consider manual review</span>{/if}
@@ -874,8 +991,8 @@
 							<div class="mode-actions">
 								{#if d.status === 'auto'}
 									{#if dg?.items.length}
-										<button class="mini" onclick={() => (digestOpen = { ...digestOpen, [key]: !digestOpen[key] })}>
-											{digestOpen[key] ? 'Hide actions' : `Review ${dg.items.length}`}
+										<button class="mini show" onclick={() => (digestOpen = { ...digestOpen, [key]: !digestOpen[key] })}>
+											{digestOpen[key] ? 'Hide' : 'Show'}
 										</button>
 									{/if}
 									<button class="mini" disabled={promotionBusy[key]} onclick={() => changePromotion(d, 'demote')}>Demote to manual</button>
@@ -890,29 +1007,7 @@
 							</div>
 						</div>
 						{#if dg && digestOpen[key]}
-							<div class="digest-detail">
-								{#if dg.applied}<button class="mini undo-all" onclick={() => undoAutoGroup(dg)}>Undo all {dg.applied}</button>{/if}
-								<ul class="digest-list">
-									{#each dg.items as it (it.actionId)}
-										<li class:undone={it.status === 'rolled_back'} class:failed={it.status === 'failed'}>
-											<div class="digest-item">
-												<div class="digest-text">
-													<span class="from">{it.from}</span>
-													<span class="subject">{it.subject ?? '(no subject)'}</span>
-													{#if it.flagged && it.status === 'applied'}<span class="badge flagged">low confidence</span>{/if}
-													{#if it.status === 'rolled_back'}<span class="muted">undone</span>{/if}
-													{#if it.status === 'failed'}<span class="badge failed">failed{it.error ? `: ${it.error}` : ''}</span>{/if}
-													{#if it.reason}<span class="reason">{it.reason}</span>{/if}
-												</div>
-												<div class="digest-actions">
-													{#if it.status === 'applied'}<button class="mini" onclick={() => undoAutoItem(it)}>Undo</button>{/if}
-													<a class="gmail" href={gmailLink(it.threadId)} target="_blank" rel="noreferrer">open</a>
-												</div>
-											</div>
-										</li>
-									{/each}
-								</ul>
-							</div>
+							{@render digestDetail(dg)}
 						{/if}
 					</div>
 				{/each}
@@ -990,6 +1085,7 @@
 				</div>
 			{/if}
 		</section>
+		{/if}
 	{/each}
 
 	<!-- Leftover / uncovered launchpad -->
@@ -1703,6 +1799,83 @@
 	}
 	.rule-card {
 		padding-bottom: 0.75rem;
+	}
+
+	/* Autopilot receipt: a finished sentence, not a control panel. */
+	.receipt-card {
+		background: #f8fefb;
+		border-color: #cdeadb;
+		padding: 0.5rem 0.75rem;
+		margin-bottom: 0.5rem;
+	}
+	.receipt-card.idle {
+		background: #fff;
+		border-color: #eaecf0;
+	}
+	.receipt-head {
+		font-size: 0.86rem;
+		margin-bottom: 0.15rem;
+	}
+	.receipt + .receipt {
+		margin-top: 0.3rem;
+		border-top: 1px solid #e4f3ea;
+		padding-top: 0.3rem;
+	}
+	.receipt-row {
+		display: flex;
+		align-items: baseline;
+		justify-content: space-between;
+		gap: 0.75rem;
+	}
+	.receipt-line {
+		margin: 0;
+		font-size: 0.88rem;
+		color: #101828;
+		min-width: 0;
+	}
+	.mode-summary .receipt-line {
+		font-size: inherit;
+	}
+	.receipt-line.idle {
+		color: #667085;
+	}
+	.receipt-line em {
+		color: #667085;
+	}
+	.receipt-line .tick {
+		color: #12b76a;
+		font-weight: 700;
+		margin-right: 0.1rem;
+	}
+	.receipt-line .verb.trash {
+		color: #b42318;
+	}
+	.receipt-line .verb.archive {
+		color: #027a48;
+	}
+	.receipt-line .verb.label_todo,
+	.receipt-line .verb.mark_read {
+		color: #b54708;
+	}
+	.receipt-actions {
+		display: flex;
+		align-items: center;
+		gap: 0.4rem;
+		flex-shrink: 0;
+	}
+	.mini.show {
+		border-color: #2f6df6;
+		color: #2f6df6;
+		font-weight: 600;
+	}
+	.receipt p.mode-warning {
+		margin: 0.15rem 0 0;
+	}
+	.receipt .digest-detail {
+		margin-top: 0.35rem;
+		border-radius: 6px;
+		border: 1px solid #e4f3ea;
+		padding: 0 0.55rem 0.4rem;
 	}
 	.rule-modes {
 		margin-top: 0.55rem;
