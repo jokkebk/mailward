@@ -70,6 +70,7 @@
 	const AI_REVIEW_CHOICES: AiDisposition[] = ['trash', 'archive', 'label_todo', 'skip', 'correct'];
 
 	type AiDisposition = RuleAction | 'skip' | 'correct';
+	type RuleFilter = 'current' | 'review' | 'automatic' | 'all';
 	type RuleDispositionDialog = {
 		ruleId: string;
 		versionId: string;
@@ -88,6 +89,7 @@
 		proposal?: ProposalGroup;
 		digests: AutoDigestGroup[];
 	};
+	let ruleFilter = $state<RuleFilter>('current');
 
 	onMount(async () => {
 		const params = new URLSearchParams(location.search);
@@ -232,6 +234,21 @@
 		}
 		return [...byRule.values()].sort((a, b) => a.priority - b.priority || a.name.localeCompare(b.name));
 	});
+	let currentRuleCount = $derived(ruleFlow.filter(ruleHitThisRun).length);
+	let reviewRuleCount = $derived(ruleFlow.filter((rule) => Boolean(rule.proposal?.threads.length)).length);
+	let automaticRuleCount = $derived(ruleFlow.filter((rule) => rule.dispositions.some((d) => d.status === 'auto')).length);
+	let visibleRuleFlow = $derived(
+		ruleFlow.filter((rule) => {
+			if (ruleFilter === 'current') return ruleHitThisRun(rule);
+			if (ruleFilter === 'review') return Boolean(rule.proposal?.threads.length);
+			if (ruleFilter === 'automatic') return rule.dispositions.some((d) => d.status === 'auto');
+			return true;
+		})
+	);
+
+	function ruleHitThisRun(rule: RuleFlowItem) {
+		return Boolean(rule.proposal?.threads.length) || rule.digests.some((g) => g.items.length > 0);
+	}
 
 	function digestFor(rule: RuleFlowItem, d: RuleDispositionMetrics) {
 		return rule.digests.find((g) => g.action === d.action);
@@ -689,6 +706,7 @@
 	}
 </script>
 
+<div class="workspace-top">
 <div class="bar">
 	{#if accounts.length}
 		<select onchange={(e) => selectAccount((e.target as HTMLSelectElement).value)} value={accountId}>
@@ -764,6 +782,25 @@
 	</section>
 {/if}
 
+{#if accountId && ruleFlow.length}
+	<nav class="rule-filters" aria-label="Rule visibility">
+		<span class="filter-label">Rules</span>
+		<button class:active={ruleFilter === 'current'} onclick={() => (ruleFilter = 'current')}>
+			This run <span>{currentRuleCount}</span>
+		</button>
+		<button class:active={ruleFilter === 'review'} onclick={() => (ruleFilter = 'review')}>
+			Needs review <span>{reviewRuleCount}</span>
+		</button>
+		<button class:active={ruleFilter === 'automatic'} onclick={() => (ruleFilter = 'automatic')}>
+			Automatic <span>{automaticRuleCount}</span>
+		</button>
+		<button class:active={ruleFilter === 'all'} onclick={() => (ruleFilter = 'all')}>
+			All <span>{ruleFlow.length}</span>
+		</button>
+	</nav>
+{/if}
+</div>
+
 {#if reauthNeeded}
 	<div class="reauth">
 		🔑 Gmail access expired (experimental apps reauth weekly).
@@ -773,7 +810,10 @@
 
 {#if accountId && (ruleFlow.length || leftovers.length)}
 	<!-- One rule queue: priority order, regardless of auto/manual state. -->
-	{#each ruleFlow as rule (rule.ruleId)}
+	{#if !visibleRuleFlow.length}
+		<p class="no-rule-hits">No rules in this view.</p>
+	{/if}
+	{#each visibleRuleFlow as rule (rule.ruleId)}
 		{@const g = rule.proposal}
 		<section class="card rule-card" class:busy={g ? deciding[g.versionId] : false}>
 			{#if g && deciding[g.versionId]}
@@ -1059,12 +1099,22 @@
 {/if}
 
 <style>
+	.workspace-top {
+		position: sticky;
+		top: 0;
+		z-index: 10;
+		margin: 0 -0.45rem 1rem;
+		padding: 0.55rem 0.45rem;
+		background: rgba(245, 246, 248, 0.94);
+		backdrop-filter: blur(10px);
+		border-bottom: 1px solid rgba(208, 213, 221, 0.8);
+	}
 	.bar {
 		display: flex;
 		gap: 0.5rem;
 		align-items: center;
 		flex-wrap: wrap;
-		margin-bottom: 0.75rem;
+		margin-bottom: 0.5rem;
 	}
 	select {
 		padding: 0.4rem 0.5rem;
@@ -1135,9 +1185,59 @@
 		background: #fff;
 		border: 1px solid #d0d5dd;
 		border-radius: 8px;
-		margin-bottom: 1rem;
+		margin-bottom: 0.5rem;
 		font-size: 0.82rem;
 		overflow: hidden;
+	}
+	.rule-filters {
+		display: flex;
+		align-items: center;
+		gap: 0.3rem;
+		overflow-x: auto;
+		padding-top: 0.05rem;
+	}
+	.filter-label {
+		margin-right: 0.15rem;
+		color: #667085;
+		font-size: 0.75rem;
+		font-weight: 700;
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+	}
+	.rule-filters button {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.35rem;
+		border: 1px solid #d0d5dd;
+		border-radius: 999px;
+		background: #fff;
+		color: #475467;
+		padding: 0.25rem 0.55rem;
+		font-size: 0.75rem;
+		white-space: nowrap;
+		cursor: pointer;
+	}
+	.rule-filters button span {
+		color: #98a2b3;
+		font-variant-numeric: tabular-nums;
+	}
+	.rule-filters button.active {
+		border-color: #2f6df6;
+		background: #eef4ff;
+		color: #1849a9;
+		font-weight: 700;
+	}
+	.rule-filters button.active span {
+		color: #2f6df6;
+	}
+	.no-rule-hits {
+		margin: 0 0 1rem;
+		padding: 0.8rem;
+		border: 1px dashed #d0d5dd;
+		border-radius: 8px;
+		color: #667085;
+		font-size: 0.82rem;
+		text-align: center;
 	}
 	.run-summary {
 		display: flex;
