@@ -52,18 +52,13 @@
 		label_todo: '→ TODO',
 		mark_read: 'Mark read'
 	};
-	// Auto-applied work is described as a finished sentence: "Automatically <verb> N emails<suffix>".
+	// Auto-applied work is described as a finished sentence: "Automatically <verb> N emails".
+	// The verb carries the whole disposition so it can be highlighted as one unit.
 	const autoVerb: Record<string, string> = {
 		archive: 'Archived',
 		trash: 'Trashed',
-		label_todo: 'Marked',
-		mark_read: 'Marked'
-	};
-	const autoSuffix: Record<string, string> = {
-		archive: '',
-		trash: '',
-		label_todo: ' as TODO',
-		mark_read: ' as read'
+		label_todo: 'Marked as TODO',
+		mark_read: 'Marked as read'
 	};
 	const reviewLabel: Record<AiDisposition, string> = {
 		trash: 'Trash',
@@ -879,7 +874,7 @@
 							<em>Automatically</em>
 							<strong class="verb {d.action}">{autoVerb[d.action]}</strong>
 							{n}
-							{n === 1 ? 'email' : 'emails'}{autoSuffix[d.action]}{#if solo}{' '}in
+							{n === 1 ? 'email' : 'emails'}{#if solo}{' '}in
 								<strong>{rule.name}</strong> <span class="muted">(prio {rule.priority})</span>{/if}.
 						{:else if solo}
 							Nothing matched <strong>{rule.name}</strong>
@@ -967,7 +962,7 @@
 											<em>Automatically</em>
 											<strong class="verb {d.action}">{autoVerb[d.action]}</strong>
 											{dg.applied}
-											{dg.applied === 1 ? 'email' : 'emails'}{autoSuffix[d.action]} this run.
+											{dg.applied === 1 ? 'email' : 'emails'} this run.
 										</span>
 									{:else}
 										<span class="badge {d.action}">{actionLabel[d.action]}</span>
