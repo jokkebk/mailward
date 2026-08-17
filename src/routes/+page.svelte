@@ -174,7 +174,7 @@
 	/** The human's confirm click — the only path a disposition has to auto-apply. */
 	async function changePromotion(
 		d: RuleDispositionMetrics,
-		op: 'promote' | 'demote' | 'pin' | 'unpin'
+		op: 'promote' | 'demote' | 'pin' | 'unpin' | 'resume'
 	) {
 		const key = promotionKey(d);
 		promotionBusy = { ...promotionBusy, [key]: true };
@@ -985,6 +985,7 @@
 								{#if !asReceipt}<span class="badge {d.action}">{actionLabel[d.action]}</span>{/if}
 								{#if d.ruleStatus === 'suspended'}
 									<span class="badge pinned">suspended</span>
+									<span class="muted">switched off after a reject — not running</span>
 								{:else if d.status === 'auto'}
 									{#if dg?.applied}
 										<span class="receipt-line">
@@ -1014,7 +1015,10 @@
 								{/if}
 							</div>
 							<div class="mode-actions">
-								{#if d.status === 'auto'}
+								<!-- Suspension is rule-level, so it outranks whatever the disposition says. -->
+								{#if d.ruleStatus === 'suspended'}
+									<button class="mini show" disabled={promotionBusy[key]} onclick={() => changePromotion(d, 'resume')}>Resume rule</button>
+								{:else if d.status === 'auto'}
 									{#if dg?.items.length}
 										<button class="mini show" onclick={() => (digestOpen = { ...digestOpen, [key]: !digestOpen[key] })}>
 											{digestOpen[key] ? 'Hide' : 'Show'}
@@ -1026,7 +1030,7 @@
 								{:else if d.eligible}
 									<button class="btn primary" disabled={promotionBusy[key]} onclick={() => changePromotion(d, 'promote')}>Promote to automatic</button>
 									<button class="mini" disabled={promotionBusy[key]} onclick={() => changePromotion(d, 'pin')}>Keep manual</button>
-								{:else if d.ruleStatus !== 'suspended'}
+								{:else}
 									<button class="mini" disabled={promotionBusy[key]} onclick={() => changePromotion(d, 'pin')}>Always manual</button>
 								{/if}
 							</div>

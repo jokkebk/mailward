@@ -181,6 +181,23 @@ export async function suspendRule(accountId: string, ruleId: string): Promise<vo
 		.where(and(eq(rules.id, ruleId), eq(rules.accountId, accountId)));
 }
 
+/**
+ * Undo a suspension. Back to 'proposing', never straight to 'auto' — a rule that
+ * was switched off has to earn auto-apply through the gate again.
+ */
+export async function resumeRule(accountId: string, ruleId: string): Promise<void> {
+	const rule = await db
+		.select({ id: rules.id })
+		.from(rules)
+		.where(and(eq(rules.id, ruleId), eq(rules.accountId, accountId)))
+		.get();
+	if (!rule) throw new Error('Rule not found for this account.');
+	await db
+		.update(rules)
+		.set({ status: 'proposing', updatedAt: new Date() })
+		.where(and(eq(rules.id, ruleId), eq(rules.accountId, accountId)));
+}
+
 /** Reverse a single applied action using its stored prior state. */
 export async function undoAction(accountId: string, actionId: string): Promise<ApplyOutcome> {
 	const action = await db

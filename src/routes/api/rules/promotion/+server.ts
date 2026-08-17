@@ -5,6 +5,7 @@ import {
 	setDispositionManualOnly,
 	setDispositionStatus
 } from '$lib/server/triage/promotion';
+import { resumeRule } from '$lib/server/triage/apply';
 import type { RuleAction } from '$lib/types/rules';
 import type { RequestHandler } from './$types';
 
@@ -15,12 +16,13 @@ import type { RequestHandler } from './$types';
  */
 
 const VALID_ACTIONS = new Set<RuleAction>(['archive', 'trash', 'label_todo']);
-const VALID_OPS = new Set(['promote', 'demote', 'pin', 'unpin']);
+const VALID_OPS = new Set(['promote', 'demote', 'pin', 'unpin', 'resume']);
 
 interface Body {
 	ruleId: string;
 	action: RuleAction;
-	op: 'promote' | 'demote' | 'pin' | 'unpin';
+	/** 'resume' lifts a rule-level suspension; the rest act on one disposition. */
+	op: 'promote' | 'demote' | 'pin' | 'unpin' | 'resume';
 }
 
 export const GET: RequestHandler = async ({ url }) => {
@@ -39,7 +41,9 @@ export const POST: RequestHandler = async ({ url, request }) => {
 	}
 
 	try {
-		if (body.op === 'promote') {
+		if (body.op === 'resume') {
+			await resumeRule(accountId, body.ruleId);
+		} else if (body.op === 'promote') {
 			await setDispositionStatus(accountId, body.ruleId, body.action, 'auto');
 		} else if (body.op === 'demote') {
 			await setDispositionStatus(accountId, body.ruleId, body.action, 'proposing');
