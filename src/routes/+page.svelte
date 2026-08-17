@@ -20,6 +20,7 @@
 	let reauthNeeded = $state(false);
 	let status = $state('');
 	let progress = $state<any | null>(null);
+	let progressOpen = $state(false);
 
 	let runId = $state<string | null>(null);
 	let proposals = $state<ProposalGroup[]>([]);
@@ -27,10 +28,9 @@
 	let leftovers = $state<ThreadView[]>([]);
 	let history = $state<any[]>([]);
 
-	// Auto-apply: the "this was done" receipt + the promotion gate panel.
+	// Per-rule disclosure and promotion state.
 	let digestOpen = $state<Record<string, boolean>>({});
 	let promotion = $state<RuleDispositionMetrics[]>([]);
-	let promotionOpen = $state(false);
 	let promotionBusy = $state<Record<string, boolean>>({});
 
 	// Per-group UI state, keyed by versionId.
@@ -78,6 +78,16 @@
 		action: RuleAction;
 		note: string;
 	};
+	type RuleFlowItem = {
+		ruleId: string;
+		name: string;
+		priority: number;
+		tier: RuleDispositionMetrics['tier'];
+		ruleStatus: RuleDispositionMetrics['ruleStatus'];
+		dispositions: RuleDispositionMetrics[];
+		proposal?: ProposalGroup;
+		digests: AutoDigestGroup[];
+	};
 
 	onMount(async () => {
 		const params = new URLSearchParams(location.search);
@@ -117,6 +127,10 @@
 			autoDigest = data.autoDigest ?? [];
 			leftovers = data.leftovers ?? [];
 			initChecks(proposals);
+			if (runId) {
+				const pr = await api(`/api/run/progress?runId=${encodeURIComponent(runId)}`);
+				if (pr.ok) progress = await pr.json();
+			}
 		} catch {
 			/* reauth handled in api() */
 		}
@@ -161,13 +175,6 @@
 			const data = await r.json();
 			if (!r.ok) throw new Error(data.error || 'promotion change failed');
 			promotion = data.dispositions ?? promotion;
-			const verb = {
-				promote: 'now auto-applies',
-				demote: 'back to propose-only',
-				pin: 'pinned to manual review',
-				unpin: 'unpinned'
-			}[op];
-			status = `${d.ruleName} · ${actionLabel[d.action]} — ${verb}.`;
 		} catch (e) {
 			if ((e as Error).message !== 'reauth') status = `Error: ${(e as Error).message}`;
 		} finally {
@@ -195,10 +202,52 @@
 		await loadPromotion();
 	}
 
-	let autoDigestTotal = $derived(autoDigest.reduce((n, g) => n + g.applied, 0));
-	let autoDigestFlagged = $derived(autoDigest.reduce((n, g) => n + g.flagged + g.failed, 0));
-	let promotionEligible = $derived(promotion.filter((d) => d.eligible));
-	let promotionAuto = $derived(promotion.filter((d) => d.status === 'auto'));
+	let ruleFlow = $derived.by(() => {
+		const byRule = new Map<string, RuleFlowItem>();
+		const ensure = (
+			ruleId: string,
+			name: string,
+			priority: number,
+			tier: RuleFlowItem['tier'],
+			ruleStatus: RuleFlowItem['ruleStatus']
+		) => {
+			let item = byRule.get(ruleId);
+			if (!item) {
+				item = { ruleId, name, priority, tier, ruleStatus, dispositions: [], digests: [] };
+				byRule.set(ruleId, item);
+			}
+			return item;
+		};
+		for (const d of promotion) {
+			ensure(d.ruleId, d.ruleName, d.priority, d.tier, d.ruleStatus).dispositions.push(d);
+		}
+		for (const g of proposals) {
+			ensure(g.ruleId, g.name, g.priority, g.tier, g.status).proposal = g;
+		}
+		for (const g of autoDigest) {
+			const fallbackPriority = promotion.find((d) => d.ruleId === g.ruleId)?.priority ?? Number.MAX_SAFE_INTEGER;
+			const fallbackTier = promotion.find((d) => d.ruleId === g.ruleId)?.tier ?? 'deterministic';
+			const fallbackStatus = promotion.find((d) => d.ruleId === g.ruleId)?.ruleStatus ?? 'auto';
+			ensure(g.ruleId, g.ruleName, fallbackPriority, fallbackTier, fallbackStatus).digests.push(g);
+		}
+		return [...byRule.values()].sort((a, b) => a.priority - b.priority || a.name.localeCompare(b.name));
+	});
+
+	function digestFor(rule: RuleFlowItem, d: RuleDispositionMetrics) {
+		return rule.digests.find((g) => g.action === d.action);
+	}
+
+	function proposalCountFor(rule: RuleFlowItem, d: RuleDispositionMetrics) {
+		return rule.proposal?.threads.filter((t) => t.action === d.action).length ?? 0;
+	}
+
+	function progressPercent(p: any | null): number | null {
+		if (p?.status === 'completed') return 100;
+		const current = p?.activeStep?.current;
+		const total = p?.activeStep?.total;
+		if (typeof current !== 'number' || typeof total !== 'number' || total <= 0) return null;
+		return Math.min(100, Math.max(2, Math.round((current / total) * 100)));
+	}
 
 	/** Pre-check high/med, pre-uncheck low — approve-all does the safe thing. */
 	function initChecks(groups: ProposalGroup[]) {
@@ -261,6 +310,16 @@
 		return `${(ms / 1000).toFixed(1)} s`;
 	}
 
+	function fmtRunTime(ms: number | null | undefined) {
+		if (!ms) return '';
+		return new Intl.DateTimeFormat(undefined, {
+			month: 'short',
+			day: 'numeric',
+			hour: '2-digit',
+			minute: '2-digit'
+		}).format(ms);
+	}
+
 	function progressLine(p: any | null) {
 		const step = p?.activeStep;
 		if (!step) return p?.status === 'running' ? 'Starting…' : '';
@@ -289,6 +348,7 @@
 		running = true;
 		reauthNeeded = false;
 		progress = null;
+		progressOpen = false;
 		status = sync ? 'Starting fetch & analyze…' : 'Starting analysis…';
 		try {
 			const r = await api(`/api/run?sync=${sync}`, { method: 'POST' });
@@ -304,13 +364,10 @@
 
 				if (progressData.status === 'completed') {
 					proposals = progressData.result?.proposals ?? [];
-					autoDigest = progressData.result?.autoDigest ?? [];
 					leftovers = progressData.result?.leftovers ?? [];
 					initChecks(proposals);
-					const autoCount = autoDigest.reduce((n, g) => n + g.applied, 0);
-					status =
-						`Done · ${proposals.length} rule group(s) · ${leftovers.length} uncovered` +
-						(autoCount ? ` · ${autoCount} auto-applied` : '');
+					await refreshAutoDigest();
+					status = 'Sync complete';
 					await loadHistory();
 					await loadPromotion();
 					break;
@@ -649,47 +706,59 @@
 	{/if}
 </div>
 
-{#if status}<p class="status">{status}</p>{/if}
-
-{#if progress && (running || progress.rules?.length || progress.aiTotals?.calls)}
-	<section class="progress-panel">
-		<div class="progress-head">
-			<div>
-				<strong>{progressLine(progress) || 'Run progress'}</strong>
-				<span class="muted"> · run {progress.runId.slice(0, 8)} · {progress.status}</span>
-			</div>
-			<div class="usage">
-				AI calls {fmtInt(progress.aiTotals?.calls ?? 0)} · tokens {fmtInt(progress.aiTotals?.totalTokens)} · chars {fmtInt((progress.aiTotals?.promptChars ?? 0) + (progress.aiTotals?.responseChars ?? 0))}
-			</div>
+{#if status || progress}
+	<section class="run-strip" class:running>
+		<button
+			class="run-summary"
+			disabled={!progress}
+			aria-expanded={progressOpen}
+			onclick={() => progress && (progressOpen = !progressOpen)}
+		>
+			<span class="run-state" aria-hidden="true">{running ? '↻' : progress?.status === 'completed' ? '✓' : '!'}</span>
+			<strong>{running ? progressLine(progress) || status : progress?.status === 'completed' ? 'Last run' : status || 'Run status'}</strong>
+			{#if !running && progress?.status === 'completed'}<span class="complete-label">Complete</span>{/if}
+			{#if progress}<span class="muted">{fmtRunTime(progress.startedAt)} · run {progress.runId.slice(0, 8)}</span>{/if}
+			<span class="run-expand">{progressOpen ? 'Hide details' : 'Details'} {progressOpen ? '▴' : '▾'}</span>
+		</button>
+		<div class="progress-track" aria-label="Run progress">
+			<div
+				class="progress-fill"
+				class:indeterminate={running && progressPercent(progress) == null}
+				style:width={`${progressPercent(progress) ?? (running ? 35 : progress?.status === 'completed' ? 100 : 0)}%`}
+			></div>
 		</div>
-		{#if progress.warnings?.length}
-			<div class="warnings">
-				{#each progress.warnings as warning}
-					<div>{warning}</div>
-				{/each}
-			</div>
-		{/if}
-		{#if progress.rules?.length}
-			<div class="rule-grid">
-				<div class="rule-grid-head">Rule</div>
-				<div class="rule-grid-head">Filter</div>
-				<div class="rule-grid-head">Body</div>
-				<div class="rule-grid-head">AI</div>
-				<div class="rule-grid-head">Claimed</div>
-				<div class="rule-grid-head">Time</div>
-				<div class="rule-grid-head">Usage</div>
-				{#each progress.rules as r (r.ruleId)}
-					<div>
-						<strong>{r.name}</strong>
-						<span class="muted"> · {r.tier ?? 'rule'}{r.needsBody ? ' · body' : ''}</span>
+		{#if progressOpen && progress}
+			<div class="progress-details">
+				<div class="usage">
+					AI calls {fmtInt(progress.aiTotals?.calls ?? 0)} · tokens {fmtInt(progress.aiTotals?.totalTokens)} · chars {fmtInt((progress.aiTotals?.promptChars ?? 0) + (progress.aiTotals?.responseChars ?? 0))}
+				</div>
+				{#if progress.warnings?.length}
+					<div class="warnings">
+						{#each progress.warnings as warning}<div>{warning}</div>{/each}
 					</div>
-					<div>{fmtInt(r.matchedCount)} / {fmtInt(r.poolSize)}</div>
-					<div>{fmtInt(r.bodyFetchCount)}</div>
-					<div>{fmtInt(r.aiBatchCount)}</div>
-					<div>{fmtInt(r.claimedCount)}</div>
-					<div>{fmtMs(r.durationMs)}</div>
-					<div>{fmtInt(r.totalTokens)} tok · {fmtInt(r.promptChars + r.responseChars)} chars</div>
-				{/each}
+				{/if}
+				{#if progress.rules?.length}
+					<div class="rule-grid-wrap">
+					<div class="rule-grid">
+						<div class="rule-grid-head">Rule</div>
+						<div class="rule-grid-head">Filter</div>
+						<div class="rule-grid-head">Body</div>
+						<div class="rule-grid-head">AI</div>
+						<div class="rule-grid-head">Claimed</div>
+						<div class="rule-grid-head">Time</div>
+						<div class="rule-grid-head">Usage</div>
+						{#each progress.rules as r (r.ruleId)}
+							<div><strong>{r.name}</strong> <span class="muted">· {r.tier ?? 'rule'}{r.needsBody ? ' · body' : ''}</span></div>
+							<div>{fmtInt(r.matchedCount)} / {fmtInt(r.poolSize)}</div>
+							<div>{fmtInt(r.bodyFetchCount)}</div>
+							<div>{fmtInt(r.aiBatchCount)}</div>
+							<div>{fmtInt(r.claimedCount)}</div>
+							<div>{fmtMs(r.durationMs)}</div>
+							<div>{fmtInt(r.totalTokens)} tok · {fmtInt(r.promptChars + r.responseChars)} chars</div>
+						{/each}
+					</div>
+					</div>
+				{/if}
 			</div>
 		{/if}
 	</section>
@@ -702,116 +771,122 @@
 	</div>
 {/if}
 
-<!-- Auto-apply receipt: already done, expand to review, undo anything wrong. -->
-{#if accountId && autoDigest.length}
-	<section class="card auto-digest">
-		<div class="card-head">
-			<div>
-				<strong>✅ Done automatically</strong>
-				<span class="muted">· {autoDigestTotal} thread(s) across {autoDigest.length} rule(s)</span>
-				{#if autoDigestFlagged}
-					<span class="badge flagged">{autoDigestFlagged} worth a look</span>
-				{/if}
-			</div>
-		</div>
-		<p class="intent">
-			These rules earned auto-apply, so they acted without asking. Nothing here needs a
-			decision — expand a rule if you want to check its work, and undo anything that was wrong.
-		</p>
-		{#each autoDigest as g (g.ruleId + g.action)}
-			<div class="digest-group">
-				<div class="digest-head">
-					<button
-						class="digest-toggle"
-						onclick={() => (digestOpen = { ...digestOpen, [g.ruleId + g.action]: !digestOpen[g.ruleId + g.action] })}
-					>
-						<span class="caret">{digestOpen[g.ruleId + g.action] ? '▾' : '▸'}</span>
-						<span class="badge {g.action}">{actionLabel[g.action]}</span>
-						<strong>{g.ruleName}</strong>
-						<span class="muted">· {g.applied} done</span>
-						{#if g.flagged}<span class="badge flagged">{g.flagged} low confidence</span>{/if}
-						{#if g.rolledBack}<span class="muted">· {g.rolledBack} undone</span>{/if}
-						{#if g.failed}<span class="badge failed">{g.failed} failed</span>{/if}
-					</button>
-					{#if g.applied}
-						<button class="mini" onclick={() => undoAutoGroup(g)}>Undo all {g.applied}</button>
-					{/if}
-				</div>
-				{#if digestOpen[g.ruleId + g.action]}
-					<ul class="digest-list">
-						{#each g.items as it (it.actionId)}
-							<li class:undone={it.status === 'rolled_back'} class:failed={it.status === 'failed'}>
-								<div class="digest-item">
-									<div class="digest-text">
-										<span class="from">{it.from}</span>
-										<span class="subject">{it.subject ?? '(no subject)'}</span>
-										{#if it.flagged && it.status === 'applied'}
-											<span class="badge flagged">low confidence</span>
-										{/if}
-										{#if it.status === 'rolled_back'}<span class="muted">· undone</span>{/if}
-										{#if it.status === 'failed'}
-											<span class="badge failed">failed{it.error ? `: ${it.error}` : ''}</span>
-										{/if}
-										{#if it.reason}<span class="reason">{it.reason}</span>{/if}
-									</div>
-									<div class="digest-actions">
-										{#if it.status === 'applied'}
-											<button class="mini" onclick={() => undoAutoItem(it)}>Undo</button>
-										{/if}
-										<a class="gmail" href={gmailLink(it.threadId)} target="_blank" rel="noreferrer">open</a>
-									</div>
-								</div>
-							</li>
-						{/each}
-					</ul>
-				{/if}
-			</div>
-		{/each}
-	</section>
-{/if}
-
-{#if accountId && (proposals.length || leftovers.length)}
-	<!-- Proposals -->
-	{#each proposals as g (g.versionId)}
-		<section class="card" class:busy={deciding[g.versionId]}>
-			{#if deciding[g.versionId]}
+{#if accountId && (ruleFlow.length || leftovers.length)}
+	<!-- One rule queue: priority order, regardless of auto/manual state. -->
+	{#each ruleFlow as rule (rule.ruleId)}
+		{@const g = rule.proposal}
+		<section class="card rule-card" class:busy={g ? deciding[g.versionId] : false}>
+			{#if g && deciding[g.versionId]}
 				<div class="overlay"><span class="spinner"></span> Applying…</div>
 			{/if}
 			<div class="card-head">
 				<div>
-					<strong>{g.name}</strong>
-					{#if g.tier === 'ai'}<span class="tier">AI</span>{/if}
-					<span class="muted">· {g.threads.length} thread(s) · prio {g.priority}</span>
+					<strong>{rule.name}</strong>
+					{#if rule.tier === 'ai'}<span class="tier">AI</span>{/if}
+					<span class="muted">· priority {rule.priority}</span>
 				</div>
-				<div class="verbs">
-					{#if g.tier === 'ai'}
-						<button class="btn primary" disabled={deciding[g.versionId]} onclick={() => applyReviewed(g)}>
-							{applyReviewedLabel(g)}
-						</button>
-						<button class="btn" disabled={deciding[g.versionId]} onclick={() => resetSuggestions(g)}>Reset suggestions</button>
-					{:else}
-						<button class="btn approve {g.action}" disabled={deciding[g.versionId]} onclick={() => decide(g, 'approve')}>
-							{actionLabel[g.action]} (Approve)
-						</button>
-						<button class="btn" disabled={deciding[g.versionId]} onclick={() => openRuleDispositionDialog(g)}>Change disposition</button>
-						<button class="btn" disabled={deciding[g.versionId]} onclick={() => decide(g, 'amend')}>Amend</button>
-					{/if}
-					<button class="btn danger" disabled={deciding[g.versionId]} onclick={() => decide(g, 'reject')}>{g.tier === 'ai' ? 'Reject...' : 'Reject'}</button>
-				</div>
-			</div>
-			{#if g.intent}<p class="intent">{g.intent}</p>{/if}
-			{#each dispositionGroups(g) as sub (sub.action)}
-				{#if g.tier === 'ai'}
-					<div class="subhead">
-						<span class="badge {sub.action}">{actionLabel[sub.action]}</span>
-						<span class="muted">{sub.items.length}</span>
+				{#if g}
+					<div class="verbs">
+						{#if g.tier === 'ai'}
+							<button class="btn primary" disabled={deciding[g.versionId]} onclick={() => applyReviewed(g)}>{applyReviewedLabel(g)}</button>
+							<button class="btn" disabled={deciding[g.versionId]} onclick={() => resetSuggestions(g)}>Reset suggestions</button>
+						{:else}
+							<button class="btn approve {g.action}" disabled={deciding[g.versionId]} onclick={() => decide(g, 'approve')}>{actionLabel[g.action]} (Approve)</button>
+							<button class="btn" disabled={deciding[g.versionId]} onclick={() => openRuleDispositionDialog(g)}>Change disposition</button>
+							<button class="btn" disabled={deciding[g.versionId]} onclick={() => decide(g, 'amend')}>Amend</button>
+						{/if}
+						<button class="btn danger" disabled={deciding[g.versionId]} onclick={() => decide(g, 'reject')}>{g.tier === 'ai' ? 'Reject...' : 'Reject'}</button>
 					</div>
 				{/if}
-				<ThreadList
-					items={sub.items}
-					dim={(t) => g.tier !== 'ai' && !isChecked(g, t.id)}
-					onOpen={(t) => (viewingEmail = t)}
-				>
+			</div>
+
+			<div class="rule-modes">
+				{#each rule.dispositions as d (promotionKey(d))}
+					{@const dg = digestFor(rule, d)}
+					{@const key = promotionKey(d)}
+					{@const proposalCount = proposalCountFor(rule, d)}
+					<div class="rule-mode" class:auto={d.status === 'auto'} class:ready={d.eligible}>
+						<div class="mode-row">
+							<div class="mode-summary">
+								<span class="badge {d.action}">{actionLabel[d.action]}</span>
+								{#if d.ruleStatus === 'suspended'}
+									<span class="badge pinned">suspended</span>
+								{:else if d.status === 'auto'}
+									<span class="badge auto">automatic</span>
+									<span class="muted">
+										{dg ? `${dg.applied} applied this run` : 'no email matched this run'}
+										{dg?.rolledBack ? ` · ${dg.rolledBack} undone` : ''}
+									</span>
+									{#if dg?.flagged}<span class="badge flagged">{dg.flagged} check</span>{/if}
+									{#if dg?.failed}<span class="badge failed">{dg.failed} failed</span>{/if}
+									{#if d.rolledBack}<span class="mode-warning">Corrections detected — consider manual review</span>{/if}
+								{:else if d.manualOnly}
+									<span class="badge pinned">manual only</span>
+									<span class="muted">{proposalCount ? `${proposalCount} to review this run` : 'no email matched this run'}</span>
+								{:else if d.eligible}
+									<span class="badge ready">ready to automate</span>
+									<span class="muted">{proposalCount ? `${proposalCount} to review this run · ` : 'none this run · '}{d.leadingSuccessRun} approvals in a row · {d.approvalPct}% approved</span>
+								{:else}
+									<span class="badge manual">manual review</span>
+									<span class="muted">{proposalCount ? `${proposalCount} this run · ` : 'none this run · '}{d.leadingSuccessRun}/{d.minRun} approval streak · {d.approvalPct ?? 0}/{d.minApprovalPct}%</span>
+								{/if}
+							</div>
+							<div class="mode-actions">
+								{#if d.status === 'auto'}
+									{#if dg?.items.length}
+										<button class="mini" onclick={() => (digestOpen = { ...digestOpen, [key]: !digestOpen[key] })}>
+											{digestOpen[key] ? 'Hide actions' : `Review ${dg.items.length}`}
+										</button>
+									{/if}
+									<button class="mini" disabled={promotionBusy[key]} onclick={() => changePromotion(d, 'demote')}>Demote to manual</button>
+								{:else if d.manualOnly}
+									<button class="mini" disabled={promotionBusy[key]} onclick={() => changePromotion(d, 'unpin')}>Allow automation</button>
+								{:else if d.eligible}
+									<button class="btn primary" disabled={promotionBusy[key]} onclick={() => changePromotion(d, 'promote')}>Promote to automatic</button>
+									<button class="mini" disabled={promotionBusy[key]} onclick={() => changePromotion(d, 'pin')}>Keep manual</button>
+								{:else if d.ruleStatus !== 'suspended'}
+									<button class="mini" disabled={promotionBusy[key]} onclick={() => changePromotion(d, 'pin')}>Always manual</button>
+								{/if}
+							</div>
+						</div>
+						{#if dg && digestOpen[key]}
+							<div class="digest-detail">
+								{#if dg.applied}<button class="mini undo-all" onclick={() => undoAutoGroup(dg)}>Undo all {dg.applied}</button>{/if}
+								<ul class="digest-list">
+									{#each dg.items as it (it.actionId)}
+										<li class:undone={it.status === 'rolled_back'} class:failed={it.status === 'failed'}>
+											<div class="digest-item">
+												<div class="digest-text">
+													<span class="from">{it.from}</span>
+													<span class="subject">{it.subject ?? '(no subject)'}</span>
+													{#if it.flagged && it.status === 'applied'}<span class="badge flagged">low confidence</span>{/if}
+													{#if it.status === 'rolled_back'}<span class="muted">undone</span>{/if}
+													{#if it.status === 'failed'}<span class="badge failed">failed{it.error ? `: ${it.error}` : ''}</span>{/if}
+													{#if it.reason}<span class="reason">{it.reason}</span>{/if}
+												</div>
+												<div class="digest-actions">
+													{#if it.status === 'applied'}<button class="mini" onclick={() => undoAutoItem(it)}>Undo</button>{/if}
+													<a class="gmail" href={gmailLink(it.threadId)} target="_blank" rel="noreferrer">open</a>
+												</div>
+											</div>
+										</li>
+									{/each}
+								</ul>
+							</div>
+						{/if}
+					</div>
+				{/each}
+			</div>
+
+			{#if g}
+				<div class="manual-review">
+					<p class="review-heading"><strong>Needs review</strong> <span class="muted">· {g.threads.length} thread(s)</span></p>
+					{#if g.intent}<p class="intent">{g.intent}</p>{/if}
+					{#each dispositionGroups(g) as sub (sub.action)}
+						{#if g.tier === 'ai'}
+							<div class="subhead"><span class="badge {sub.action}">{actionLabel[sub.action]}</span><span class="muted">{sub.items.length}</span></div>
+						{/if}
+						<ThreadList items={sub.items} dim={(t) => g.tier !== 'ai' && !isChecked(g, t.id)} onOpen={(t) => (viewingEmail = t)}>
 					{#snippet lead(t)}
 						{@const it = t as ProposalItem}
 						{#if g.tier !== 'ai'}
@@ -870,8 +945,10 @@
 							<a class="gmail" href={gmailLink(t.id)} target="_blank" rel="noreferrer">open</a>
 						{/if}
 					{/snippet}
-				</ThreadList>
-			{/each}
+						</ThreadList>
+					{/each}
+				</div>
+			{/if}
 		</section>
 	{/each}
 
@@ -945,145 +1022,6 @@
 {/if}
 
 <!-- History + rollback -->
-<!-- Promotion gate: suggest-and-confirm. Only this panel can set a disposition to auto. -->
-{#if accountId && promotion.length}
-	<section class="card promotion">
-		<div class="card-head">
-			<div>
-				<strong>Auto-apply</strong>
-				<span class="muted">
-					· {promotionAuto.length} on
-					{#if promotionEligible.length}· {promotionEligible.length} ready{/if}
-				</span>
-			</div>
-			<button class="btn" onclick={() => (promotionOpen = !promotionOpen)}>
-				{promotionOpen ? 'Hide all rules' : 'Show all rules'}
-			</button>
-		</div>
-
-		{#if promotionEligible.length}
-			<p class="intent">
-				These have been approved verbatim long enough to earn auto-apply. Turn one on and it
-				stops asking — it acts, then reports in “Done automatically” where you can undo it.
-			</p>
-			{#each promotionEligible as d (promotionKey(d))}
-				<div class="promo-row ready">
-					<div class="promo-text">
-						<span class="badge {d.action}">{actionLabel[d.action]}</span>
-						<strong>{d.ruleName}</strong>
-						<span class="muted">
-							· {d.leadingSuccessRun} approvals in a row at {d.approvalPct}% (needs {d.minRun} at {d.minApprovalPct}%)
-						</span>
-					</div>
-					<div class="promo-actions">
-						<button
-							class="btn primary"
-							disabled={promotionBusy[promotionKey(d)]}
-							onclick={() => changePromotion(d, 'promote')}
-						>
-							Turn on auto-apply
-						</button>
-						<button
-							class="mini"
-							disabled={promotionBusy[promotionKey(d)]}
-							onclick={() => changePromotion(d, 'pin')}
-						>
-							Never auto
-						</button>
-					</div>
-				</div>
-			{/each}
-		{/if}
-
-		{#each promotionAuto as d (promotionKey(d))}
-			<div class="promo-row on">
-				<div class="promo-text">
-					<span class="badge {d.action}">{actionLabel[d.action]}</span>
-					<strong>{d.ruleName}</strong>
-					<span class="badge auto">auto</span>
-					<span class="muted">· {d.applied} applied{d.rolledBack ? `, ${d.rolledBack} undone` : ''}</span>
-				</div>
-				<div class="promo-actions">
-					<button
-						class="mini"
-						disabled={promotionBusy[promotionKey(d)]}
-						onclick={() => changePromotion(d, 'demote')}
-					>
-						Back to review
-					</button>
-					<button
-						class="mini"
-						disabled={promotionBusy[promotionKey(d)]}
-						onclick={() => changePromotion(d, 'pin')}
-					>
-						Never auto
-					</button>
-				</div>
-			</div>
-		{/each}
-
-		{#if promotionOpen}
-			<table class="promo-table">
-				<thead>
-					<tr>
-						<th>Rule</th>
-						<th>Disposition</th>
-						<th>Streak</th>
-						<th>Approval</th>
-						<th>State</th>
-						<th></th>
-					</tr>
-				</thead>
-				<tbody>
-					{#each promotion as d (promotionKey(d))}
-						<tr>
-							<td>{d.ruleName}</td>
-							<td><span class="badge {d.action}">{actionLabel[d.action]}</span></td>
-							<td class="num">{d.leadingSuccessRun}/{d.minRun}</td>
-							<td class="num">
-								{d.approvalPct == null ? '—' : `${d.approvalPct}%`}
-								<span class="muted">/{d.minApprovalPct}%</span>
-							</td>
-							<td>
-								{#if d.manualOnly}
-									<span class="badge pinned">manual only</span>
-								{:else if d.status === 'auto'}
-									<span class="badge auto">auto</span>
-								{:else if d.eligible}
-									<span class="badge flagged">ready</span>
-								{:else if d.ruleStatus === 'suspended'}
-									<span class="muted">suspended</span>
-								{:else}
-									<span class="muted">proposing</span>
-								{/if}
-							</td>
-							<td class="promo-actions">
-								{#if d.manualOnly}
-									<button
-										class="mini"
-										disabled={promotionBusy[promotionKey(d)]}
-										onclick={() => changePromotion(d, 'unpin')}
-									>
-										Allow auto
-									</button>
-								{:else}
-									<button
-										class="mini"
-									disabled={promotionBusy[promotionKey(d)]}
-										onclick={() => changePromotion(d, 'pin')}
-									>
-										Never auto
-									</button>
-								{/if}
-							</td>
-						</tr>
-					{/each}
-				</tbody>
-			</table>
-		{/if}
-	</section>
-{/if}
-
 {#if history.length}
 	<section class="card history">
 		<div class="card-head"><strong>History</strong></div>
@@ -1193,20 +1131,82 @@
 		line-height: 1;
 		padding: 0.1rem 0.25rem;
 	}
-	.status {
-		font-size: 0.85rem;
-		color: #475467;
-		background: #eef2ff;
-		padding: 0.4rem 0.6rem;
-		border-radius: 6px;
-	}
-	.progress-panel {
+	.run-strip {
 		background: #fff;
 		border: 1px solid #d0d5dd;
 		border-radius: 8px;
-		padding: 0.75rem;
 		margin-bottom: 1rem;
 		font-size: 0.82rem;
+		overflow: hidden;
+	}
+	.run-summary {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		width: 100%;
+		padding: 0.48rem 0.65rem;
+		border: 0;
+		background: transparent;
+		color: #344054;
+		text-align: left;
+		cursor: pointer;
+	}
+	.run-summary:disabled {
+		cursor: default;
+	}
+	.run-state {
+		display: grid;
+		place-items: center;
+		width: 1.1rem;
+		height: 1.1rem;
+		border-radius: 50%;
+		background: #ecfdf3;
+		color: #027a48;
+		font-weight: 800;
+	}
+	.run-strip.running .run-state {
+		background: #eef2ff;
+		color: #3538cd;
+		animation: spin 0.9s linear infinite;
+	}
+	.run-expand {
+		margin-left: auto;
+		color: #667085;
+		font-size: 0.75rem;
+	}
+	.complete-label {
+		padding: 0.08rem 0.38rem;
+		border-radius: 999px;
+		background: #ecfdf3;
+		color: #027a48;
+		font-size: 0.7rem;
+		font-weight: 700;
+	}
+	.progress-track {
+		height: 4px;
+		background: #eaecf0;
+		overflow: hidden;
+	}
+	.progress-fill {
+		height: 100%;
+		background: #12b76a;
+		transition: width 0.25s ease;
+	}
+	.run-strip.running .progress-fill {
+		background: #2f6df6;
+	}
+	.progress-fill.indeterminate {
+		animation: progress-slide 1.1s ease-in-out infinite alternate;
+	}
+	@keyframes progress-slide {
+		from { transform: translateX(-85%); }
+		to { transform: translateX(185%); }
+	}
+	.progress-details {
+		padding: 0.65rem;
+		border-top: 1px solid #eaecf0;
+		max-height: 55vh;
+		overflow-y: auto;
 	}
 	.modal-backdrop {
 		position: fixed;
@@ -1281,13 +1281,6 @@
 		gap: 0.5rem;
 		margin-top: 0.9rem;
 	}
-	.progress-head {
-		display: flex;
-		justify-content: space-between;
-		gap: 0.75rem;
-		flex-wrap: wrap;
-		align-items: center;
-	}
 	.usage {
 		color: #475467;
 		font-variant-numeric: tabular-nums;
@@ -1300,20 +1293,25 @@
 		background: #fff7ed;
 		color: #9a3412;
 	}
-	.rule-grid {
-		display: grid;
-		grid-template-columns: minmax(13rem, 1.6fr) repeat(6, minmax(4.5rem, 0.7fr));
-		gap: 0;
+	.rule-grid-wrap {
+		overflow-x: auto;
 		margin-top: 0.7rem;
 		border: 1px solid #eaecf0;
 		border-radius: 6px;
-		overflow-x: auto;
+	}
+	.rule-grid {
+		display: grid;
+		grid-template-columns: 17rem repeat(5, 4.5rem) 10rem;
+		gap: 0;
+		min-width: 49.5rem;
 	}
 	.rule-grid > div {
 		padding: 0.35rem 0.45rem;
 		border-bottom: 1px solid #f2f4f7;
 		min-width: 0;
 		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
 	}
 	.rule-grid-head {
 		background: #f9fafb;
@@ -1595,32 +1593,74 @@
 		background: #f2f4f7;
 		color: #475467;
 	}
-	.digest-group {
-		border-top: 1px solid #e3f2ea;
-		padding-top: 0.35rem;
-		margin-top: 0.35rem;
+	.badge.manual {
+		background: #f2f4f7;
+		color: #475467;
 	}
-	.digest-head {
+	.badge.ready {
+		background: #fffaeb;
+		color: #b54708;
+	}
+	.rule-card {
+		padding-bottom: 0.75rem;
+	}
+	.rule-modes {
+		margin-top: 0.55rem;
+		border: 1px solid #eaecf0;
+		border-radius: 8px;
+		overflow: hidden;
+	}
+	.rule-mode + .rule-mode {
+		border-top: 1px solid #eaecf0;
+	}
+	.rule-mode.auto {
+		background: #f6fefa;
+	}
+	.rule-mode.ready {
+		background: #fffcf5;
+	}
+	.mode-row {
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
-		gap: 0.5rem;
+		gap: 0.75rem;
+		padding: 0.45rem 0.55rem;
+		font-size: 0.82rem;
 	}
-	.digest-toggle {
+	.mode-summary {
 		display: flex;
 		align-items: center;
 		gap: 0.35rem;
-		flex: 1;
-		border: none;
-		background: none;
-		padding: 0.2rem 0;
-		cursor: pointer;
-		font-size: 0.85rem;
-		text-align: left;
+		flex-wrap: wrap;
+		min-width: 0;
 	}
-	.caret {
-		color: #98a2b3;
-		width: 0.8rem;
+	.mode-actions {
+		display: flex;
+		align-items: center;
+		gap: 0.4rem;
+		flex-shrink: 0;
+	}
+	.mode-warning {
+		color: #b54708;
+		font-size: 0.75rem;
+	}
+	.digest-detail {
+		position: relative;
+		padding: 0 0.55rem 0.4rem;
+		border-top: 1px solid #d3f0e0;
+		background: #fff;
+	}
+	.undo-all {
+		margin-top: 0.4rem;
+	}
+	.manual-review {
+		margin-top: 0.7rem;
+		padding-top: 0.65rem;
+		border-top: 1px solid #eaecf0;
+	}
+	.review-heading {
+		margin: 0 0 0.35rem;
+		font-size: 0.86rem;
 	}
 	.digest-list {
 		list-style: none;
@@ -1674,59 +1714,6 @@
 		flex-shrink: 0;
 	}
 
-	/* --- Promotion gate --- */
-	.promo-row {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: 0.6rem;
-		padding: 0.45rem 0.55rem;
-		border-radius: 8px;
-		margin-bottom: 0.35rem;
-		font-size: 0.85rem;
-	}
-	.promo-row.ready {
-		background: #fffaeb;
-		border: 1px solid #fedf89;
-	}
-	.promo-row.on {
-		background: #f6fefa;
-		border: 1px solid #d3f0e0;
-	}
-	.promo-text {
-		display: flex;
-		flex-wrap: wrap;
-		align-items: baseline;
-		gap: 0.35rem;
-		min-width: 0;
-	}
-	.promo-actions {
-		display: flex;
-		align-items: center;
-		gap: 0.4rem;
-		flex-shrink: 0;
-	}
-	.promo-table {
-		width: 100%;
-		border-collapse: collapse;
-		font-size: 0.8rem;
-		margin-top: 0.6rem;
-	}
-	.promo-table th {
-		text-align: left;
-		color: #98a2b3;
-		font-weight: 600;
-		border-bottom: 1px solid #e5e7eb;
-		padding: 0.3rem 0.4rem;
-	}
-	.promo-table td {
-		border-bottom: 1px solid #f2f4f7;
-		padding: 0.3rem 0.4rem;
-	}
-	.promo-table td.num {
-		font-variant-numeric: tabular-nums;
-		white-space: nowrap;
-	}
 	.history .run {
 		margin-top: 0.6rem;
 		border-top: 1px solid #f2f4f7;

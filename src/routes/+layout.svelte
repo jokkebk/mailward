@@ -9,7 +9,7 @@
 <div class="shell">
 	<header>
 		<h1>📬 Mailward</h1>
-		<span class="tag">v1 · manual triage</span>
+		<span class="tag" title={`Built ${__BUILD_ID__}`}>v{__APP_VERSION__} · build {__BUILD_ID__} UTC</span>
 	</header>
 	{@render children()}
 </div>
