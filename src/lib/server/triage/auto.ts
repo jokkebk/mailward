@@ -4,7 +4,8 @@ import { and, asc, eq } from 'drizzle-orm';
 import { applyThreadAction } from './apply';
 import { autoDecision, loadAutoDispositions } from './promotion';
 import { writeProposals, type NewProposal } from './proposals';
-import type { AutoDigestGroup, AutoDigestItem, Confidence, RuleAction } from '$lib/types/rules';
+import { emptyGroup, push, sortDigest, toMillis } from './digest';
+import type { Confidence, DigestGroup, DigestItem, RuleAction } from '$lib/types/rules';
 
 /**
  * The auto-apply half of a run: dispositions a human has promoted act immediately
@@ -91,13 +92,11 @@ export async function applyAutoActions(
 }
 
 /**
- * Load the "this was done" digest for a run: what auto-apply did, grouped by
- * (rule, disposition), newest first, each row undoable via its actionId.
+ * Load the autopilot receipt for a run: what auto-apply did without asking, grouped
+ * by (rule, disposition), each row undoable via its actionId. The mirror of this is
+ * `loadReviewedDigest` in ./digest, for what you decided yourself.
  */
-export async function loadAutoDigest(
-	accountId: string,
-	runId: string
-): Promise<AutoDigestGroup[]> {
+export async function loadAutoDigest(accountId: string, runId: string): Promise<DigestGroup[]> {
 	const rows = await db
 		.select({
 			a: actions,
@@ -125,61 +124,33 @@ export async function loadAutoDigest(
 		.orderBy(asc(rules.name))
 		.all();
 
-	const groups = new Map<string, AutoDigestGroup>();
+	const groups = new Map<string, DigestGroup>();
 	for (const r of rows) {
 		const action = r.a.action as RuleAction;
 		const key = `${r.a.ruleId}::${action}`;
 		let g = groups.get(key);
 		if (!g) {
-			g = {
-				ruleId: r.a.ruleId ?? '',
-				ruleName: r.ruleName,
-				action,
-				applied: 0,
-				flagged: 0,
-				rolledBack: 0,
-				failed: 0,
-				items: []
-			};
+			g = emptyGroup(r.a.ruleId ?? '', r.ruleName, action);
 			groups.set(key, g);
 		}
 
-		const status = r.a.status as AutoDigestItem['status'];
-		// `act_flag` is exactly "auto-applied at low confidence" — derive it from the
-		// recorded confidence rather than parsing the note text.
-		const flagged = r.a.confidence === 'low';
-		if (status === 'applied') g.applied++;
-		else if (status === 'rolled_back') g.rolledBack++;
-		else g.failed++;
-		if (flagged && status === 'applied') g.flagged++;
-
-		const receivedMs =
-			r.receivedAt instanceof Date ? r.receivedAt.getTime() : Number(r.receivedAt ?? 0);
-
-		g.items.push({
+		push(g, {
 			actionId: r.a.id,
 			threadId: r.a.threadId,
 			from: r.from ?? '',
 			subject: r.subject,
 			snippet: r.snippet,
-			receivedAt: receivedMs,
+			receivedAt: toMillis(r.receivedAt),
 			action,
 			confidence: (r.a.confidence as Confidence | null) ?? null,
 			reason: r.reason,
-			status,
-			flagged,
+			status: r.a.status as DigestItem['status'],
+			// `act_flag` is exactly "auto-applied at low confidence" — derive it from the
+			// recorded confidence rather than parsing the note text.
+			flagged: r.a.confidence === 'low',
 			error: r.a.error
 		});
 	}
 
-	const out = [...groups.values()];
-	for (const g of out) {
-		// Flagged and failed rows first — they are the ones worth a human's eyes.
-		g.items.sort((a, b) => {
-			const rank = (i: AutoDigestItem) => (i.status === 'failed' ? 0 : i.flagged ? 1 : 2);
-			return rank(a) - rank(b) || b.receivedAt - a.receivedAt;
-		});
-	}
-	out.sort((a, b) => b.applied - a.applied || a.ruleName.localeCompare(b.ruleName));
-	return out;
+	return sortDigest([...groups.values()]);
 }

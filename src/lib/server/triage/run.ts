@@ -17,7 +17,7 @@ import { applyAutoActions, loadAutoDigest, partitionAutoApply } from './auto';
 import { getClassifier, type ClassifyVerdict, type ThreadPayload } from '../ai';
 import { AI_BATCH_SIZE, MAX_THREADS_PER_RUN } from '$lib/constants';
 import type {
-	AutoDigestGroup,
+	DigestGroup,
 	Confidence,
 	Disposition,
 	ProposalGroup,
@@ -37,7 +37,7 @@ export interface RunResult {
 	runId: string;
 	synced: number | null; // null when the sync step was skipped
 	/** What promoted dispositions did without asking — the "this was done" receipt. */
-	autoDigest: AutoDigestGroup[];
+	autoDigest: DigestGroup[];
 	proposals: ProposalGroup[];
 	leftovers: ThreadView[];
 }

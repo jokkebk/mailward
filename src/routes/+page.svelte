@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import type {
-		AutoDigestGroup,
-		AutoDigestItem,
+		DigestGroup,
+		DigestItem,
 		Confidence,
 		ProposalGroup,
 		ProposalItem,
@@ -24,7 +24,10 @@
 
 	let runId = $state<string | null>(null);
 	let proposals = $state<ProposalGroup[]>([]);
-	let autoDigest = $state<AutoDigestGroup[]>([]);
+	let autoDigest = $state<DigestGroup[]>([]);
+	// What your review did this run — applied, left alone, or declined. Same receipt
+	// shape as autopilot, so a reviewed rule shrinks in place instead of vanishing.
+	let reviewedDigest = $state<DigestGroup[]>([]);
 	let leftovers = $state<ThreadView[]>([]);
 	let history = $state<any[]>([]);
 
@@ -97,7 +100,9 @@
 		ruleStatus: RuleDispositionMetrics['ruleStatus'];
 		dispositions: RuleDispositionMetrics[];
 		proposal?: ProposalGroup;
-		digests: AutoDigestGroup[];
+		digests: DigestGroup[];
+		/** Receipt for what your review already settled this run. */
+		reviewed: DigestGroup[];
 	};
 	let ruleFilter = $state<RuleFilter>('current');
 
@@ -137,6 +142,7 @@
 			runId = data.runId;
 			proposals = data.proposals ?? [];
 			autoDigest = data.autoDigest ?? [];
+			reviewedDigest = data.reviewedDigest ?? [];
 			leftovers = data.leftovers ?? [];
 			initChecks(proposals);
 			if (runId) {
@@ -148,11 +154,14 @@
 		}
 	}
 
-	/** Reload the auto-apply digest for the current run (after an undo). */
-	async function refreshAutoDigest() {
+	/** Reload both receipts for the current run (after a decision or an undo). */
+	async function refreshDigests() {
 		try {
 			const r = await api('/api/proposals');
-			if (r.ok) autoDigest = (await r.json()).autoDigest ?? [];
+			if (!r.ok) return;
+			const data = await r.json();
+			autoDigest = data.autoDigest ?? [];
+			reviewedDigest = data.reviewedDigest ?? [];
 		} catch {
 			/* reauth handled in api() */
 		}
@@ -194,10 +203,11 @@
 		}
 	}
 
-	/** Undo one auto-applied action from the digest. */
-	async function undoAutoItem(item: AutoDigestItem) {
+	/** Undo one applied action from a receipt (autopilot or after-review). */
+	async function undoDigestItem(item: DigestItem) {
+		if (!item.actionId) return;
 		await undo('action', { actionId: item.actionId });
-		await refreshAutoDigest();
+		await refreshDigests();
 		await loadPromotion();
 	}
 
@@ -206,11 +216,11 @@
 	 * a router rule can have one disposition on auto and another still in review, so
 	 * a batch undo would also reverse actions this group never showed.
 	 */
-	async function undoAutoGroup(g: AutoDigestGroup) {
-		for (const it of g.items.filter((i) => i.status === 'applied')) {
+	async function undoDigestGroup(g: DigestGroup) {
+		for (const it of g.items.filter((i) => i.status === 'applied' && i.actionId)) {
 			await undo('action', { actionId: it.actionId });
 		}
-		await refreshAutoDigest();
+		await refreshDigests();
 		await loadPromotion();
 	}
 
@@ -225,7 +235,7 @@
 		) => {
 			let item = byRule.get(ruleId);
 			if (!item) {
-				item = { ruleId, name, priority, tier, ruleStatus, dispositions: [], digests: [] };
+				item = { ruleId, name, priority, tier, ruleStatus, dispositions: [], digests: [], reviewed: [] };
 				byRule.set(ruleId, item);
 			}
 			return item;
@@ -242,6 +252,16 @@
 			const fallbackStatus = promotion.find((d) => d.ruleId === g.ruleId)?.ruleStatus ?? 'auto';
 			ensure(g.ruleId, g.ruleName, fallbackPriority, fallbackTier, fallbackStatus).digests.push(g);
 		}
+		for (const g of reviewedDigest) {
+			const d = promotion.find((p) => p.ruleId === g.ruleId);
+			ensure(
+				g.ruleId,
+				g.ruleName,
+				d?.priority ?? Number.MAX_SAFE_INTEGER,
+				d?.tier ?? 'deterministic',
+				d?.ruleStatus ?? 'proposing'
+			).reviewed.push(g);
+		}
 		return [...byRule.values()].sort((a, b) => a.priority - b.priority || a.name.localeCompare(b.name));
 	});
 	let currentRuleCount = $derived(ruleFlow.filter(ruleHitThisRun).length);
@@ -257,11 +277,27 @@
 	);
 
 	function ruleHitThisRun(rule: RuleFlowItem) {
-		return Boolean(rule.proposal?.threads.length) || rule.digests.some((g) => g.items.length > 0);
+		return (
+			Boolean(rule.proposal?.threads.length) ||
+			rule.digests.some((g) => g.items.length > 0) ||
+			rule.reviewed.some((g) => g.items.length > 0)
+		);
 	}
 
 	function digestFor(rule: RuleFlowItem, d: RuleDispositionMetrics) {
 		return rule.digests.find((g) => g.action === d.action);
+	}
+
+	function reviewedDigestFor(rule: RuleFlowItem, d: RuleDispositionMetrics) {
+		return rule.reviewed.find((g) => g.action === d.action);
+	}
+
+	/** The part of a reviewed receipt that didn't happen: left alone, or declined. */
+	function declinedTail(rd: DigestGroup | undefined) {
+		const parts: string[] = [];
+		if (rd?.skipped) parts.push(`${rd.skipped} left alone`);
+		if (rd?.rejected) parts.push(`${rd.rejected} declined`);
+		return parts.join(' · ');
 	}
 
 	/** What still stands between a manual disposition and auto-apply, in words rather than ratios. */
@@ -272,6 +308,16 @@
 		if ((d.approvalPct ?? 0) < d.minApprovalPct) parts.push(`${d.approvalPct ?? 0}% approved, needs ${d.minApprovalPct}%`);
 		if (d.rolledBack) parts.push(`${d.rolledBack} undone blocks automation`);
 		return parts.join(' · ') || `${d.leadingSuccessRun} of ${d.minRun} approvals in a row`;
+	}
+
+	/**
+	 * The muted tail after a status badge: what the run left to do. Suppressed once a
+	 * receipt sentence has already accounted for this disposition's emails.
+	 */
+	function runPhrase(proposalCount: number, handled: number) {
+		if (proposalCount) return `${proposalCount} to review this run · `;
+		if (handled) return '';
+		return 'none this run · ';
 	}
 
 	/** The raw gate numbers, kept as a tooltip so the visible line stays readable. */
@@ -286,7 +332,11 @@
 	function visibleDispositions(rule: RuleFlowItem) {
 		if (ruleFilter !== 'current') return rule.dispositions;
 		const active = rule.dispositions.filter(
-			(d) => digestFor(rule, d)?.items.length || proposalCountFor(rule, d) || d.eligible
+			(d) =>
+				digestFor(rule, d)?.items.length ||
+				reviewedDigestFor(rule, d)?.items.length ||
+				proposalCountFor(rule, d) ||
+				d.eligible
 		);
 		return active.length ? active : rule.dispositions;
 	}
@@ -295,6 +345,7 @@
 	function isAutoOnly(rule: RuleFlowItem) {
 		return (
 			!rule.proposal &&
+			!rule.reviewed.some((g) => g.items.length > 0) &&
 			rule.dispositions.length > 0 &&
 			rule.dispositions.every((d) => d.status === 'auto' && d.ruleStatus !== 'suspended')
 		);
@@ -429,7 +480,7 @@
 					proposals = progressData.result?.proposals ?? [];
 					leftovers = progressData.result?.leftovers ?? [];
 					initChecks(proposals);
-					await refreshAutoDigest();
+					await refreshDigests();
 					status = 'Sync complete';
 					await loadHistory();
 					await loadPromotion();
@@ -640,6 +691,8 @@
 			proposals = proposals.filter((p) => p.versionId !== g.versionId);
 			status = `${data.appliedCount ?? 0} applied for "${g.name}"${data.failed ? `, ${data.failed} failed` : ''}.`;
 			await loadHistory();
+			await refreshDigests();
+			await loadPromotion();
 		} catch (e) {
 			if ((e as Error).message !== 'reauth') status = `Error: ${(e as Error).message}`;
 		} finally {
@@ -688,6 +741,8 @@
 					? `Rejected "${g.name}"${data.suspended ? ' and suspended it' : ''}.`
 					: `${data.appliedCount ?? 0} applied for "${g.name}"${data.failed ? `, ${data.failed} failed` : ''}.`;
 			await loadHistory();
+			await refreshDigests();
+			await loadPromotion();
 		} catch (e) {
 			if ((e as Error).message !== 'reauth') status = `Error: ${(e as Error).message}`;
 		} finally {
@@ -854,23 +909,29 @@
 	</div>
 {/if}
 
-{#snippet digestDetail(dg: AutoDigestGroup)}
+{#snippet digestDetail(dg: DigestGroup)}
 	<div class="digest-detail">
-		{#if dg.applied}<button class="mini undo-all" onclick={() => undoAutoGroup(dg)}>Undo all {dg.applied}</button>{/if}
+		{#if dg.applied}<button class="mini undo-all" onclick={() => undoDigestGroup(dg)}>Undo all {dg.applied}</button>{/if}
 		<ul class="digest-list">
-			{#each dg.items as it (it.actionId)}
-				<li class:undone={it.status === 'rolled_back'} class:failed={it.status === 'failed'}>
+			{#each dg.items as it (it.threadId)}
+				<li
+					class:undone={it.status === 'rolled_back'}
+					class:failed={it.status === 'failed'}
+					class:untouched={it.status === 'skipped' || it.status === 'rejected'}
+				>
 					<div class="digest-item">
 						<div class="digest-text">
 							<span class="from">{it.from}</span>
 							<span class="subject">{it.subject ?? '(no subject)'}</span>
 							{#if it.flagged && it.status === 'applied'}<span class="badge flagged">low confidence</span>{/if}
 							{#if it.status === 'rolled_back'}<span class="muted">undone</span>{/if}
+							{#if it.status === 'skipped'}<span class="muted">left alone</span>{/if}
+							{#if it.status === 'rejected'}<span class="muted">declined</span>{/if}
 							{#if it.status === 'failed'}<span class="badge failed">failed{it.error ? `: ${it.error}` : ''}</span>{/if}
 							{#if it.reason}<span class="reason">{it.reason}</span>{/if}
 						</div>
 						<div class="digest-actions">
-							{#if it.status === 'applied'}<button class="mini" onclick={() => undoAutoItem(it)}>Undo</button>{/if}
+							{#if it.status === 'applied'}<button class="mini" onclick={() => undoDigestItem(it)}>Undo</button>{/if}
 							<a class="gmail" href={gmailLink(it.threadId)} target="_blank" rel="noreferrer">open</a>
 						</div>
 					</div>
@@ -975,14 +1036,53 @@
 			<div class="rule-modes">
 				{#each visibleDispositions(rule) as d (promotionKey(d))}
 					{@const dg = digestFor(rule, d)}
+					{@const rd = reviewedDigestFor(rule, d)}
 					{@const key = promotionKey(d)}
+					{@const rKey = `${promotionKey(d)}::reviewed`}
 					{@const proposalCount = proposalCountFor(rule, d)}
 					<!-- The receipt sentence already names the action, so it drops the leading badge. -->
 					{@const asReceipt = d.status === 'auto' && d.ruleStatus !== 'suspended' && Boolean(dg?.applied)}
-					<div class="rule-mode" class:auto={d.status === 'auto'} class:ready={d.eligible}>
+					<!--
+						What your review settled keeps its place in the priority queue and shrinks
+						to the same one-line receipt autopilot gets — including a declined batch,
+						which leaves no action behind and would otherwise vanish without trace.
+						Promoting a rule mid-run doesn't retract what you already approved, so this
+						is independent of the disposition's current status.
+					-->
+					{@const handled = rd?.applied ?? 0}
+					{@const declined = declinedTail(rd)}
+					{@const asReviewed = handled > 0 || Boolean(declined)}
+					<div
+						class="rule-mode"
+						class:auto={d.status === 'auto'}
+						class:reviewed={asReviewed}
+						class:ready={d.eligible && !asReviewed}
+					>
 						<div class="mode-row">
 							<div class="mode-summary">
-								{#if !asReceipt}<span class="badge {d.action}">{actionLabel[d.action]}</span>{/if}
+								{#if !asReceipt && !asReviewed}<span class="badge {d.action}">{actionLabel[d.action]}</span>{/if}
+								{#if asReviewed}
+									<span class="receipt-line">
+										{#if handled}
+											<span class="tick">✓</span>
+											<strong class="verb {d.action}">{autoVerb[d.action]}</strong>
+											{handled}
+											{handled === 1 ? 'email' : 'emails'}
+											<em>after your review</em>.
+										{:else}
+											<span class="cross">✗</span>
+											<em>Did not</em>
+											<strong class="verb {d.action}">{actionLabel[d.action]}</strong>
+											<em>the</em>
+											{rd?.items.length}
+											{rd?.items.length === 1 ? 'email' : 'emails'}
+											<em>you reviewed</em>.
+										{/if}
+									</span>
+									{#if handled && declined}<span class="muted">· {declined}</span>{/if}
+									{#if rd?.rolledBack}<span class="muted">· {rd.rolledBack} undone</span>{/if}
+									{#if rd?.failed}<span class="badge failed">{rd.failed} failed</span>{/if}
+								{/if}
 								{#if d.ruleStatus === 'suspended'}
 									<span class="badge pinned">suspended</span>
 									<span class="muted">switched off after a reject — not running</span>
@@ -995,9 +1095,11 @@
 											{dg.applied}
 											{dg.applied === 1 ? 'email' : 'emails'} this run.
 										</span>
-									{:else}
+									{:else if !asReviewed}
 										<span class="badge {d.action}">{actionLabel[d.action]}</span>
 										<span class="muted">automatic · nothing matched this run</span>
+									{:else}
+										<span class="badge auto">automatic from now on</span>
 									{/if}
 									{#if dg?.rolledBack}<span class="muted">· {dg.rolledBack} undone</span>{/if}
 									{#if dg?.flagged}<span class="badge flagged">{dg.flagged} check</span>{/if}
@@ -1005,16 +1107,24 @@
 									{#if d.rolledBack}<span class="mode-warning">Corrections detected — consider manual review</span>{/if}
 								{:else if d.manualOnly}
 									<span class="badge pinned">manual only</span>
-									<span class="muted">{proposalCount ? `${proposalCount} to review this run` : 'no email matched this run'}</span>
+									<span class="muted">{proposalCount ? `${proposalCount} to review this run` : handled ? 'stays manual by choice' : 'no email matched this run'}</span>
 								{:else if d.eligible}
 									<span class="badge ready">ready to automate</span>
-									<span class="muted" title={automationDetail(d)}>{proposalCount ? `${proposalCount} to review this run · ` : 'none this run · '}{d.leadingSuccessRun} approvals in a row · {d.approvalPct}% approved</span>
+									<span class="muted" title={automationDetail(d)}>{runPhrase(proposalCount, handled)}{d.leadingSuccessRun} approvals in a row · {d.approvalPct}% approved</span>
 								{:else}
 									<span class="badge manual">manual review</span>
-									<span class="muted" title={automationDetail(d)}>{proposalCount ? `${proposalCount} to review this run · ` : 'none this run · '}{automationGap(d)}</span>
+									<span class="muted" title={automationDetail(d)}>{runPhrase(proposalCount, handled)}{automationGap(d)}</span>
 								{/if}
 							</div>
 							<div class="mode-actions">
+								{#if asReviewed && rd}
+									<button class="mini show" onclick={() => (digestOpen = { ...digestOpen, [rKey]: !digestOpen[rKey] })}>
+										{digestOpen[rKey] ? 'Hide' : 'Show'}
+									</button>
+									{#if handled}
+										<button class="mini" onclick={() => undoDigestGroup(rd)}>Undo</button>
+									{/if}
+								{/if}
 								<!-- Suspension is rule-level, so it outranks whatever the disposition says. -->
 								{#if d.ruleStatus === 'suspended'}
 									<button class="mini show" disabled={promotionBusy[key]} onclick={() => changePromotion(d, 'resume')}>Resume rule</button>
@@ -1037,6 +1147,9 @@
 						</div>
 						{#if dg && digestOpen[key]}
 							{@render digestDetail(dg)}
+						{/if}
+						{#if rd && digestOpen[rKey]}
+							{@render digestDetail(rd)}
 						{/if}
 					</div>
 				{/each}
@@ -1892,6 +2005,11 @@
 	.receipt-line em {
 		color: #667085;
 	}
+	.receipt-line .cross {
+		color: #98a2b3;
+		font-weight: 700;
+		margin-right: 0.1rem;
+	}
 	.receipt-line .tick {
 		color: #12b76a;
 		font-weight: 700;
@@ -1941,6 +2059,14 @@
 	}
 	.rule-mode.ready {
 		background: #fffcf5;
+	}
+	/* A reviewed receipt reads like autopilot's, but cooler than its green. */
+	.rule-mode.reviewed {
+		background: #f8fbff;
+	}
+	.digest-list li.untouched .subject,
+	.digest-list li.untouched .from {
+		color: #667085;
 	}
 	.mode-row {
 		display: flex;

@@ -117,11 +117,15 @@ export interface RuleDispositionMetrics extends DispositionMetrics {
 }
 
 /**
- * One thing that already happened without asking. The digest is a post-hoc
- * receipt, so every row carries the `actionId` needed to undo it on its own.
+ * What became of one thread on one rule in a run: acted on, or deliberately not.
+ * Receipts are post-hoc, so every acted row carries the `actionId` needed to undo
+ * it on its own; `skipped`/`rejected` rows have nothing to undo.
  */
-export interface AutoDigestItem {
-	actionId: string;
+export type DigestItemStatus = 'applied' | 'rolled_back' | 'failed' | 'skipped' | 'rejected';
+
+export interface DigestItem {
+	/** Null for rows that were never applied (skipped in an amend, or rejected). */
+	actionId: string | null;
 	threadId: string;
 	from: string;
 	subject: string | null;
@@ -130,13 +134,14 @@ export interface AutoDigestItem {
 	action: RuleAction;
 	confidence: Confidence | null;
 	reason: string | null;
-	status: 'applied' | 'rolled_back' | 'failed';
+	status: DigestItemStatus;
 	/** Acted on but low-confidence (autoDecision 'act_flag') — worth a glance. */
 	flagged: boolean;
 	error: string | null;
 }
 
-export interface AutoDigestGroup {
+/** One (rule, disposition)'s receipt for a run, whether autopilot or after review. */
+export interface DigestGroup {
 	ruleId: string;
 	ruleName: string;
 	action: RuleAction;
@@ -144,7 +149,11 @@ export interface AutoDigestGroup {
 	flagged: number;
 	rolledBack: number;
 	failed: number;
-	items: AutoDigestItem[];
+	/** Left alone in an amend — the rule was right, this instance wasn't. */
+	skipped: number;
+	/** Declined with the whole batch. */
+	rejected: number;
+	items: DigestItem[];
 }
 
 export interface ProposalGroup {
