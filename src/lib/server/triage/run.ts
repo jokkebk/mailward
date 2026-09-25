@@ -14,7 +14,7 @@ import {
 	type NewProposal
 } from './proposals';
 import { applyAutoActions, loadAutoDigest, partitionAutoApply } from './auto';
-import { getClassifier, type ClassifyVerdict, type ThreadPayload } from '../ai';
+import { classifierCacheKey, getClassifier, type ClassifierMode, type ClassifyVerdict, type ThreadPayload } from '../ai';
 import { AI_BATCH_SIZE, MAX_THREADS_PER_RUN } from '$lib/constants';
 import type {
 	DigestGroup,
@@ -47,6 +47,8 @@ export interface RunOptions {
 	 *  re-run rules against the already-synced pool (fast dev iteration). */
 	sync?: boolean;
 	runId?: string;
+	/** UI trial switch. Direct/internal callers keep the configured older classifier. */
+	useJev?: boolean;
 }
 
 function chunk<T>(arr: T[], size: number): T[][] {
@@ -97,7 +99,8 @@ interface CachedAiClassification {
 async function loadCachedAiClassifications(
 	accountId: string,
 	ruleVersionId: string,
-	candidates: ThreadView[]
+	candidates: ThreadView[],
+	cacheKey: string
 ): Promise<Map<string, CachedAiClassification>> {
 	const threadIds = candidates.map((v) => v.id);
 	if (threadIds.length === 0) return new Map();
@@ -111,6 +114,7 @@ async function loadCachedAiClassifications(
 				and(
 					eq(aiClassifications.accountId, accountId),
 					eq(aiClassifications.ruleVersionId, ruleVersionId),
+					eq(aiClassifications.cacheKey, cacheKey),
 					inArray(aiClassifications.threadId, ids)
 				)
 			)
@@ -132,6 +136,7 @@ async function writeAiClassificationCache(input: {
 	accountId: string;
 	runId: string;
 	rule: ResolvedRule;
+	cacheKey: string;
 	views: Map<string, ThreadView>;
 	verdicts: ClassifyVerdict[];
 }): Promise<void> {
@@ -144,6 +149,7 @@ async function writeAiClassificationCache(input: {
 			and(
 				eq(aiClassifications.accountId, input.accountId),
 				eq(aiClassifications.ruleVersionId, input.rule.versionId),
+				eq(aiClassifications.cacheKey, input.cacheKey),
 				inArray(aiClassifications.threadId, threadIds)
 			)
 		);
@@ -156,6 +162,7 @@ async function writeAiClassificationCache(input: {
 				ruleId: input.rule.ruleId,
 				ruleVersionId: input.rule.versionId,
 				threadId: verdict.threadId,
+				cacheKey: input.cacheKey,
 				messageIds: JSON.stringify(view?.messageIds ?? []),
 				action: verdict.action,
 				confidence: verdict.confidence,
@@ -168,13 +175,13 @@ async function writeAiClassificationCache(input: {
 	);
 }
 
-export async function createTriageRun(accountId: string, sync: boolean): Promise<string> {
+export async function createTriageRun(accountId: string, sync: boolean, useJev = false): Promise<string> {
 	await markStaleRuns(accountId);
 	const run = await db
 		.insert(runs)
 		.values({
 			accountId,
-			scope: `unread-in-inbox cap ${MAX_THREADS_PER_RUN}${sync ? '' : ' (no sync)'}`,
+			scope: `unread-in-inbox cap ${MAX_THREADS_PER_RUN}${sync ? '' : ' (no sync)'} · ${useJev ? 'Jev' : 'legacy AI'}`,
 			status: 'running',
 			startedAt: new Date()
 		})
@@ -193,7 +200,10 @@ export async function createTriageRun(accountId: string, sync: boolean): Promise
  */
 export async function runTriage(accountId: string, options: RunOptions = {}): Promise<RunResult> {
 	const sync = options.sync ?? true;
-	const runId = options.runId ?? (await createTriageRun(accountId, sync));
+	const useJev = options.useJev ?? false;
+	const classifierMode: ClassifierMode = useJev ? 'jev' : 'legacy';
+	const cacheKey = classifierCacheKey(classifierMode);
+	const runId = options.runId ?? (await createTriageRun(accountId, sync, useJev));
 	const bodyCache = new Map<string, string>();
 	let selectedSyncThreadIds: Set<string> | null = null;
 
@@ -315,7 +325,7 @@ export async function runTriage(accountId: string, options: RunOptions = {}): Pr
 					}
 				});
 				if (candidates.length > 0) {
-					await classifyRule(accountId, runId, rule, candidates, pool, collected, bodyCache);
+					await classifyRule(accountId, runId, rule, candidates, pool, collected, bodyCache, classifierMode, cacheKey);
 				}
 			} else {
 				for (const v of candidates) {
@@ -347,7 +357,7 @@ export async function runTriage(accountId: string, options: RunOptions = {}): Pr
 		}
 
 		// Promoted dispositions act now and report afterwards; the rest queue for review.
-		const partition = await partitionAutoApply(accountId, collected);
+		const partition = await partitionAutoApply(accountId, collected, { proposeAiTrash: useJev });
 
 		const autoStep = await startStep({
 			runId,
@@ -416,15 +426,18 @@ async function classifyRule(
 	candidates: ThreadView[],
 	pool: Map<string, ThreadView>,
 	collected: NewProposal[],
-	bodyCache: Map<string, string>
+	bodyCache: Map<string, string>,
+	classifierMode: ClassifierMode,
+	cacheKey: string
 ): Promise<void> {
-	const classifier = getClassifier();
+	const classifier = getClassifier(classifierMode);
 	const intent = rule.intent ?? rule.name;
 	const allowed = new Set(rule.allowedActions);
 	const cached = await loadCachedAiClassifications(
 		accountId,
 		rule.versionId,
-		candidates
+		candidates,
+		cacheKey
 	);
 	const uncachedCandidates: ThreadView[] = [];
 	let cachedClaimed = 0;
@@ -558,6 +571,7 @@ async function classifyRule(
 			accountId,
 			runId,
 			rule,
+			cacheKey,
 			views: new Map(batch.map((v) => [v.id, v])),
 			verdicts: result.verdicts
 		});

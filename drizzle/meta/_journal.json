@@ -43,6 +43,13 @@
       "when": 1786691816000,
       "tag": "0005_backfill_rule_dispositions",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1790300000000,
+      "tag": "0006_ai_classification_model_cache",
+      "breakpoints": true
     }
   ]
 }

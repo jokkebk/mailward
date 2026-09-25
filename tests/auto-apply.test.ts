@@ -39,6 +39,7 @@ const { createRule } = await import('../src/lib/server/triage/rules');
 const { runTriage } = await import('../src/lib/server/triage/run');
 const { undoAction } = await import('../src/lib/server/triage/apply');
 const { loadAutoDigest } = await import('../src/lib/server/triage/auto');
+const { partitionAutoApply } = await import('../src/lib/server/triage/auto');
 const { setDispositionManualOnly, setDispositionStatus, dispositionMetrics } = await import(
 	'../src/lib/server/triage/promotion'
 );
@@ -94,6 +95,25 @@ async function forceAuto(ruleId: string) {
 }
 
 describe('auto-apply', () => {
+	test('Jev trial keeps AI trash in review even for a promoted disposition', async () => {
+		const ruleId = await createRule(ACCOUNT, {
+			name: 'Jev trial trash safety', priority: 99, tier: 'ai',
+			intent: 'Test AI rule', action: ['trash'],
+			matchCriteria: { type: 'all', conditions: [] }
+		});
+		await forceAuto(ruleId);
+		const row = {
+			runId: 'trial-run', accountId: ACCOUNT, ruleId,
+			ruleVersionId: 'trial-version', threadId: 'trial-thread', messageIds: [],
+			action: 'trash' as const, source: 'ai' as const,
+			confidence: 'high' as const
+		};
+		const normal = await partitionAutoApply(ACCOUNT, [row]);
+		expect(normal.auto).toHaveLength(1);
+		const trial = await partitionAutoApply(ACCOUNT, [row], { proposeAiTrash: true });
+		expect(trial.auto).toHaveLength(0);
+		expect(trial.propose).toEqual([row]);
+	});
 	let alertRuleId = '';
 
 	test('proposes while proposing, acts once promoted, and reports in the digest', async () => {

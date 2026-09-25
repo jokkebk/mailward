@@ -20,7 +20,7 @@ async function markDetachedRunsFailed(accountId: string): Promise<void> {
 	await db.update(runs).set({ status: 'failed', endedAt: new Date() }).where(where);
 }
 
-export async function startOrAttachRun(accountId: string, sync: boolean): Promise<string> {
+export async function startOrAttachRun(accountId: string, sync: boolean, useJev = false): Promise<string> {
 	await markStaleRuns(accountId);
 
 	for (const runId of activeJobs.keys()) {
@@ -33,8 +33,8 @@ export async function startOrAttachRun(accountId: string, sync: boolean): Promis
 	}
 
 	await markDetachedRunsFailed(accountId);
-	const runId = await createTriageRun(accountId, sync);
-	const job = runTriage(accountId, { sync, runId })
+	const runId = await createTriageRun(accountId, sync, useJev);
+	const job = runTriage(accountId, { sync, runId, useJev })
 		.then(() => undefined)
 		.catch(async (error) => {
 			await handleReauthCleanup(error, accountId);

@@ -17,6 +17,8 @@
 	let accountId = $state<string | null>(null);
 	let accounts = $state<string[]>([]);
 	let running = $state(false);
+	let useJev = $state(false);
+	let jevAvailable = $state(false);
 	let reauthNeeded = $state(false);
 	let status = $state('');
 	let progress = $state<any | null>(null);
@@ -121,7 +123,12 @@
 
 	async function loadAccounts() {
 		const r = await fetch('/api/accounts');
-		if (r.ok) accounts = (await r.json()).accounts ?? [];
+		if (r.ok) {
+			const data = await r.json();
+			accounts = data.accounts ?? [];
+			jevAvailable = data.jevAvailable === true;
+			useJev = jevAvailable && localStorage.getItem(STORAGE_KEYS.useJev) !== 'false';
+		}
 		if (!accountId && accounts.length) selectAccount(accounts[0]);
 	}
 
@@ -131,6 +138,11 @@
 		loadHistory();
 		rehydrate();
 		loadPromotion();
+	}
+
+	function setUseJev(value: boolean) {
+		useJev = value;
+		localStorage.setItem(STORAGE_KEYS.useJev, String(value));
 	}
 
 	/** Restore the latest run's open proposals on load / account switch (no re-run). */
@@ -465,7 +477,7 @@
 		progressOpen = false;
 		status = sync ? 'Starting fetch & analyze…' : 'Starting analysis…';
 		try {
-			const r = await api(`/api/run?sync=${sync}`, { method: 'POST' });
+			const r = await api(`/api/run?sync=${sync}&jev=${jevAvailable && useJev}`, { method: 'POST' });
 			const data = await r.json();
 			if (!r.ok) throw new Error(data.error || 'run failed');
 			runId = data.runId;
@@ -816,6 +828,13 @@
 	{/if}
 	<a class="btn ghost" href="/auth">{accountId ? 'Add / re-connect account' : 'Connect Gmail'}</a>
 	{#if accountId}
+		{#if jevAvailable}
+			<label class="jev-toggle" title="Use Jev for AI rules. While this trial is on, Jev trash suggestions wait for review.">
+				<input type="checkbox" checked={useJev} disabled={running} onchange={(e) => setUseJev((e.currentTarget as HTMLInputElement).checked)} />
+				<span>Jev</span>
+				<strong>{useJev ? 'On' : 'Off'}</strong>
+			</label>
+		{/if}
 		<button class="btn primary" onclick={() => runTriage(true)} disabled={running}>
 			{running ? 'Running…' : 'Fetch & analyze'}
 		</button>
@@ -1366,6 +1385,20 @@
 		flex-wrap: wrap;
 		margin-bottom: 0.5rem;
 	}
+	.jev-toggle {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.4rem;
+		padding: 0.35rem 0.6rem;
+		border: 1px solid #cfd4dc;
+		border-radius: 6px;
+		background: #fff;
+		font-size: 0.85rem;
+		cursor: pointer;
+	}
+	.jev-toggle input { margin: 0; accent-color: #2f6df6; }
+	.jev-toggle strong { color: #2f6df6; }
+	.jev-toggle:has(input:disabled) { opacity: 0.65; cursor: default; }
 	select {
 		padding: 0.4rem 0.5rem;
 		border-radius: 6px;

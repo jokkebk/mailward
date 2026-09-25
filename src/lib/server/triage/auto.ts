@@ -30,12 +30,17 @@ export interface AutoPartition {
  */
 export async function partitionAutoApply(
 	accountId: string,
-	collected: NewProposal[]
+	collected: NewProposal[],
+	options: { proposeAiTrash?: boolean } = {}
 ): Promise<AutoPartition> {
 	const autoSet = await loadAutoDispositions(accountId);
 	const out: AutoPartition = { auto: [], propose: [] };
 
 	for (const row of collected) {
+		if (options.proposeAiTrash && row.source === 'ai' && row.action === 'trash') {
+			out.propose.push(row);
+			continue;
+		}
 		const promoted = autoSet.has(`${row.ruleId}::${row.action}`);
 		const decision = autoDecision(
 			row.action,

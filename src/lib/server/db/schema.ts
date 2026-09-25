@@ -177,7 +177,7 @@ export const aiCallLogs = sqliteTable('ai_call_logs', {
  * Stable per-thread AI classification cache keyed by the exact rule version.
  * This is separate from proposals: proposals are the current review surface for
  * one run, while this table prevents re-paying the model for the same
- * (thread, rule version) outcome across later runs. Stores `leave` too.
+ * (thread, rule version, classifier) outcome across later runs. Stores `leave` too.
  */
 export const aiClassifications = sqliteTable('ai_classifications', {
 	id: text('id').primaryKey().$defaultFn(() => crypto.randomUUID()),
@@ -187,6 +187,7 @@ export const aiClassifications = sqliteTable('ai_classifications', {
 	ruleId: text('rule_id').notNull(),
 	ruleVersionId: text('rule_version_id').notNull(),
 	threadId: text('thread_id').notNull(),
+	cacheKey: text('cache_key').notNull().default('legacy'),
 	messageIds: text('message_ids'),
 	action: text('action').notNull(), // 'archive' | 'trash' | 'label_todo' | 'leave'
 	confidence: text('confidence').notNull(), // 'high' | 'med' | 'low'
@@ -199,10 +200,11 @@ export const aiClassifications = sqliteTable('ai_classifications', {
 		.notNull()
 		.$defaultFn(() => new Date())
 }, (t) => ({
-	accountRuleThreadUniq: uniqueIndex('idx_ai_classifications_account_rule_thread').on(
+	accountRuleThreadUniq: uniqueIndex('idx_ai_classifications_account_rule_thread_model').on(
 		t.accountId,
 		t.ruleVersionId,
-		t.threadId
+		t.threadId,
+		t.cacheKey
 	),
 	ruleVersionIdx: index('idx_ai_classifications_rule_version').on(t.ruleVersionId)
 }));

@@ -1,6 +1,8 @@
 import { describe, expect, mock, test } from 'bun:test';
 import { buildUserPrompt } from '../src/lib/server/ai/prompt';
 import { normalizeVerdicts, type ClassifyRequest } from '../src/lib/server/ai/classifier';
+import { JevClassifier } from '../src/lib/server/ai/jev';
+import { hasOpenRouterKey } from '../src/lib/server/ai/availability';
 
 mock.module('$env/dynamic/private', () => ({ env: process.env }));
 
@@ -188,6 +190,57 @@ describe('GeminiClassifier', () => {
 			await expect(classifier.classify(req)).rejects.toThrow(
 				'GEMINI_THINKING_BUDGET must be a non-negative integer'
 			);
+		});
+	});
+});
+
+describe('JevClassifier', () => {
+	test('asks one typed question per thread and maps probabilities to coarse bands', async () => {
+		await withEnv('OPENROUTER_API_KEY', 'test-key', async () => {
+			let sent: any;
+			const classifier = new JevClassifier(async (_url, init) => {
+				sent = JSON.parse(String(init?.body));
+				return new Response(JSON.stringify({
+					model: 'typesafe/jev-1.13-20260917',
+					answers: {
+						thread_0: { type: 'choice', choice: 'trash', probabilities: { trash: 0.94, label_todo: 0.04, leave: 0.02 } },
+						thread_1: { type: 'choice', choice: 'label_todo', probabilities: { trash: 0.3, label_todo: 0.65, leave: 0.05 } }
+					},
+					usage: { input_tokens: 100, output_tokens: 10 }
+				}));
+			});
+			const result = await classifier.classify(req);
+			expect(Object.keys(sent.questions)).toEqual(['thread_0', 'thread_1']);
+			expect(sent.questions.thread_0.criteria).toHaveProperty('leave');
+			expect(sent.state.threads[0]).not.toHaveProperty('body');
+			expect(sent.state.threads[1].body).toBe('Can you make it?');
+			expect(result.verdicts.map((v) => [v.threadId, v.action, v.confidence])).toEqual([
+				['a', 'trash', 'high'], ['b', 'label_todo', 'low']
+			]);
+			expect(result.verdicts[0].reason).toContain('does not provide a written reason');
+			expect(result.usage.promptTokens).toBe(100);
+		});
+	});
+
+	test('rejects a missing thread answer instead of silently trusting a partial batch', async () => {
+		await withEnv('OPENROUTER_API_KEY', 'test-key', async () => {
+			const classifier = new JevClassifier(async () => new Response(JSON.stringify({
+				answers: { thread_0: { type: 'choice', choice: 'trash', probabilities: { trash: 0.9 } } }
+			})));
+			await expect(classifier.classify(req)).rejects.toThrow('invalid answer for thread 1');
+		});
+	});
+});
+
+describe('Jev availability', () => {
+	test('requires a configured key, not an empty or example value', async () => {
+		for (const value of [undefined, '', '   ', 'your_openrouter_api_key_here']) {
+			await withEnv('OPENROUTER_API_KEY', value, async () => {
+				expect(hasOpenRouterKey()).toBe(false);
+			});
+		}
+		await withEnv('OPENROUTER_API_KEY', 'test-key', async () => {
+			expect(hasOpenRouterKey()).toBe(true);
 		});
 	});
 });

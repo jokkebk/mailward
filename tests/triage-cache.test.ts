@@ -28,6 +28,7 @@ beforeAll(() => {
 
 afterAll(() => {
 	setClassifier(null);
+	setClassifier(null, 'jev');
 	try {
 		unlinkSync(dbPath);
 	} catch {
@@ -123,5 +124,27 @@ describe('AI classification cache', () => {
 			'thread-b',
 			'thread-c'
 		]);
+
+		const jevCalls: string[][] = [];
+		setClassifier({
+			async classify(req) {
+				jevCalls.push(req.threads.map((t) => t.threadId).sort());
+				return {
+					verdicts: req.threads.map((t) => ({
+						threadId: t.threadId, action: 'leave' as const,
+						confidence: 'low' as const, reason: 'test choice'
+					})),
+					usage: { provider: 'openrouter', model: 'typesafe/jev-1.13', promptChars: 0, responseChars: 0 }
+				};
+			}
+		}, 'jev');
+		await runTriage('cache@example.com', { sync: false, useJev: true });
+		await runTriage('cache@example.com', { sync: false, useJev: true });
+		expect(jevCalls).toEqual([['thread-a', 'thread-b', 'thread-c']]);
+		const legacyAgain = await runTriage('cache@example.com', { sync: false });
+		expect(calls).toEqual([['thread-a', 'thread-b'], ['thread-c'], ['thread-a']]);
+		expect(legacyAgain.proposals[0].threads).toHaveLength(3);
+		const allCached = await db.select().from(aiClassifications).all();
+		expect(allCached).toHaveLength(6);
 	});
 });

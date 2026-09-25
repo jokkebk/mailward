@@ -6,23 +6,24 @@ Proven rules later graduate to auto-apply. Everything is logged and reversible.
 
 See [DESIGN.md](DESIGN.md) for the full design and roadmap.
 
-## Status: v1 — manual spine
+## Current workflow
 
-v1 is a usable manual triage tool that also captures the training corpus the later
-AI/learning features need:
+Mailward combines deterministic and AI rules, with a review step for proposals:
 
 - Connect Gmail (OAuth) with weekly-reauth handling.
-- **Run triage**: syncs unread-in-inbox (cap 200), evaluates deterministic rules in
-  priority order with claim-and-remove, and presents proposals grouped by rule.
+- **Run triage**: syncs unread-in-inbox (cap 300), evaluates rules in priority order
+  with claim-and-remove, and presents proposals grouped by rule.
 - **Approve / Amend / Reject** each group (Reject can also suspend the rule). "Save this
   one" excludes an item from future metrics.
 - **Uncovered launchpad**: manually Archive / Trash / → TODO leftover threads (logged as
   training data), or open them in Gmail.
 - **History + rollback** at run / batch / individual granularity (delete = trash, so undo
   = untrash).
+- **Jev trial**: when `OPENROUTER_API_KEY` is configured, the run switch appears
+  and defaults on. Switch it off to use the classifier selected by `AI_PROVIDER`.
+  Jev trash suggestions always wait for review during the trial.
 
-Deferred to v2+ (designed, not built): AI tier + confidence bands, promotion gate +
-auto-apply digest, the analysis skill, per-version metrics. See DESIGN.md.
+See DESIGN.md for the rule and promotion model.
 
 ## Setup
 
@@ -46,7 +47,8 @@ bun run dev            # http://localhost:4873
 
 You can reuse the same Google project as mailnick — just add the `:4873` redirect URI.
 
-`GEMINI_API_KEY` is unused in v1 (no AI tier yet).
+Set `OPENROUTER_API_KEY` in `.env` to show the Jev switch. Without it, the
+existing `AI_PROVIDER` / model settings are used automatically.
 
 ## Tech stack
 

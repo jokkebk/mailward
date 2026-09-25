@@ -16,5 +16,6 @@ export const PROMOTION_GATE = {
 } as const;
 
 export const STORAGE_KEYS = {
-	accountId: 'mailward.accountId'
+	accountId: 'mailward.accountId',
+	useJev: 'mailward.useJev'
 } as const;
