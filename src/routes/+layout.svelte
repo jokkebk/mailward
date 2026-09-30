@@ -21,18 +21,18 @@
 		color: #1d2330;
 	}
 	.shell {
-		max-width: 1120px;
+		max-width: 1440px;
 		margin: 0 auto;
-		padding: 1rem 1.25rem 4rem;
+		padding: .5rem 1rem 2rem;
 	}
 	header {
 		display: flex;
 		align-items: baseline;
 		gap: 0.75rem;
-		padding: 0.5rem 0 1rem;
+		padding: 0 0 .3rem;
 	}
 	header h1 {
-		font-size: 1.4rem;
+		font-size: 1rem;
 		margin: 0;
 	}
 </style>

@@ -97,7 +97,7 @@
     const group = (title: string, lanes: string[]) => ({ title, rows: live.filter((i) => lanes.includes(i.lane)) });
     if (view === 'board') return [
       group('TODO · needs action', ['needs_action']), group('TODO · worth checking out', ['worth_reading']),
-      group('Unsure and show before clearing', ['decision','show_me']),
+      group('Needs a decision', ['decision']), group('Show before clearing', ['show_me']),
       { title: 'Archive', rows: live.filter((i) => i.lane === 'cleanup' && i.proposed_action === 'archive') },
       { title: 'Trash', rows: live.filter((i) => i.lane === 'cleanup' && i.proposed_action === 'trash') },
       { title: 'Applied and reviewed receipts', rows: reviewed }
@@ -120,44 +120,42 @@
 
 <svelte:head><title>Inbox review · Mailward</title></svelte:head>
 <main>
-  <div class="intro">
-    <div><p class="eyebrow">MAILWARD 3 · REVIEW FIRST</p><h2>Inbox review</h2><p>See what needs you, what is worth reading, and what can be cleared. Checking mail does not move it.</p></div>
-    <a class="legacy" href="/v2">Previous rule view</a>
-  </div>
   <div class="toolbar accountbar">
     {#if accounts.length}
       <label>Gmail account <select bind:value={accountId} onchange={() => { localStorage.setItem('mailward-account', accountId); drafts = {}; data = { run: null, policy: null, items: [], calls: [] }; refresh(); }}>
         {#each accounts as account}<option value={account}>{account}</option>{/each}
       </select></label>
       {#if data.run}<button class="primary" disabled={!accountId || busy || data.run.status === 'running'} onclick={start}>Check unread mail again</button>{/if}
-      <span class="run-status">{data.run?.status === 'running' ? 'Checking your mail…' : data.run ? `${items.length} messages in this review` : 'Ready when you are'}</span>
+      <span class="run-status" title={data.replay ? `Assessed at ${new Date(data.replay.assessedAt).toLocaleString()}` : undefined}>{data.run?.status === 'running' ? 'Checking your mail…' : data.run ? `${items.length} threads${data.replay ? ' · saved inbox replay' : ' in this review'}` : 'Ready when you are'}</span>
     {:else}<p>No Gmail account connected. <a href="/auth">Connect Gmail</a> to begin.</p>{/if}
     {#if data.run?.status === 'reauth_required'}<a href="/auth">Reconnect Gmail</a>{/if}
-  </div>
   {#if data.policy}
-    <details class="policy"><summary><strong>Your review preferences</strong><span>Built from {importInfo?.sourceRuleCount ?? 0} earlier rules and your review history · view what Jev uses</span></summary>
-      <div class="policy-body"><p>This is the starting guidance for suggestions. Every mail action still waits for your review.</p><pre>{data.policy.text}</pre><details><summary>Import details</summary><pre>{JSON.stringify(importInfo, null, 2)}</pre></details></div>
+    <details class="policy"><summary><strong>Preferences</strong><span>Policy {data.policy.version_no}</span></summary>
+      <div class="policy-body"><p>This guidance summarizes {importInfo?.sourceRuleCount ?? 0} earlier rules and your feedback. Every mail action still waits for your review.</p><p><strong>Deterministic proposals</strong>: {data.deterministicRules?.map((r: any) => `${r.name} v${r.version} → Trash`).join(', ') || 'Bare calendar responses v1 → Trash'}. Human notes and unrecognized messages go to Jev.</p><pre>{data.policy.text}</pre><details><summary>Import details</summary><pre>{JSON.stringify(importInfo, null, 2)}</pre></details></div>
     </details>
   {/if}
+    <a class="legacy" href="/v2">Previous rule view</a>
+  </div>
   {#if data.run}
   <nav aria-label="Review view">
     <button class:active={view === 'board'} onclick={() => selectView('board')}>Review</button>
     <button class:active={view === 'briefing'} onclick={() => selectView('briefing')}>Briefing</button>
     <button class:active={view === 'exceptions'} onclick={() => selectView('exceptions')}>Needs a decision</button>
   </nav>
-  <div class="toolbar secondary">
+  <div class="overview" aria-label="Inbox summary">
+    {#each [['needs_action','Needs action'],['worth_reading','Worth reading'],['decision','Needs decision'],['show_me','Show first'],['cleanup','Cleanup']] as [lane, label]}<span><strong>{items.filter((i) => !i.review_kind && i.lane === lane).length}</strong> {label}</span>{/each}
+  <details class="filters"><summary>Filters</summary><div class="toolbar secondary">
     <label>Show cleanup above priority <input type="range" min="0" max="140" step="10" bind:value={minPriority} /> {minPriority}</label>
     {#if view === 'exceptions'}
       <label><input type="checkbox" bind:checked={showCleanup} /> Show other cleanup</label>
       <label><input type="checkbox" bind:checked={showReceipts} /> Show receipts</label>
     {/if}
-    <span class="hint">These controls only change what you see.</span>
-  </div>
+  </div></details></div>
   {/if}
   {#if message}<p class="message" role="status">{message}</p>{/if}
   {#if data.run}
     {#each groups() as group}
-      {#if group.rows.length || ['Needs action','Worth checking out','TODO · needs action','TODO · worth checking out'].includes(group.title)}
+      {#if group.rows.length}
         <section><h2>{group.title} <span>{group.rows.length}</span></h2>
           {#if !group.rows.length}<p class="empty">Nothing here in this run.</p>{/if}
           {#each group.rows as item (item.id)}
@@ -172,16 +170,17 @@
 </main>
 
 <style>
-  main { max-width:1100px;margin:auto }.intro,.toolbar,nav,.submit { display:flex;align-items:center;gap:.7rem;flex-wrap:wrap }
-  .intro { justify-content:space-between;align-items:flex-start;margin:.6rem 0 1.4rem }.intro h2 { font-size:1.8rem;margin:.15rem 0 }.intro p { margin:.25rem 0;color:#596474 }.eyebrow { letter-spacing:.13em;font-size:.72rem;font-weight:700;color:#4e65a1!important }.legacy { color:#51617e;font-size:.82rem;margin-top:.5rem }
-  .toolbar { background:#fff;border:1px solid #d9dee8;border-radius:10px;padding:.8rem;margin:.7rem 0 }.accountbar { gap:1rem }.accountbar label { display:flex;flex-direction:column;gap:.3rem;font-size:.76rem;font-weight:700;color:#596474 }.accountbar select { font-weight:500;font-size:.9rem }.run-status,.hint { color:#596474;font-size:.82rem }
-  button,select { border:1px solid #bec8da;border-radius:6px;padding:.43rem .7rem;background:white;color:#26344a;cursor:pointer;font:inherit }
+  main { max-width:1400px;margin:auto }.toolbar,nav,.submit { display:flex;align-items:center;gap:.7rem;flex-wrap:wrap }
+  .legacy { color:#51617e;font-size:.76rem;margin-left:auto }
+  .toolbar { background:#fff;border:1px solid #d9dee8;border-radius:10px;padding:.3rem .5rem;margin:.3rem 0 }.accountbar { gap:1rem }.accountbar label { display:flex;align-items:center;gap:.4rem;font-size:.76rem;font-weight:700;color:#596474 }.accountbar select { font-weight:500;font-size:.8rem }.run-status { color:#596474;font-size:.82rem }
+  button,select { border:1px solid #bec8da;border-radius:6px;padding:.25rem .5rem;background:white;color:#26344a;cursor:pointer;font:inherit;font-size:.8rem }
   button:disabled { opacity:.5;cursor:default }button.primary { background:#375dc1;color:white;border-color:#375dc1 }
-  nav { border-bottom:1px solid #ccd4e2;gap:.2rem;margin:1.5rem 0 1rem }nav button { border:0;border-radius:7px 7px 0 0 }nav button.active { background:#dfe8ff;color:#213f91;font-weight:700 }
+  nav { border-bottom:1px solid #ccd4e2;gap:.2rem;margin:.4rem 0 .3rem }nav button { border:0;border-radius:7px 7px 0 0 }nav button.active { background:#dfe8ff;color:#213f91;font-weight:700 }
   .secondary { background:#f7f9fc }.secondary label { display:flex;align-items:center;gap:.35rem;font-size:.8rem }.secondary input[type=range] { width:7rem }
-  section { margin:1.5rem 0 }h2 { font-size:1rem;margin:.4rem 0;color:#253958 }h2 span { color:#667892;font-weight:400 }
+  section { margin:.25rem 0 }section h2 { background:#eaf0f7;padding:2px 7px;font-size:.78rem;margin:0;color:#253958 }h2 span { color:#667892;font-weight:400 }
   .empty { color:#748198;font-size:.87rem }.message { padding:.6rem;background:#fff7df;border:1px solid #ecd48b;border-radius:7px }
-  .submit { position:sticky;bottom:0;justify-content:flex-end;background:#f5f7fc;padding:.75rem;border-top:1px solid #d8dfec;box-shadow:0 -4px 12px #fff }
-  .policy { display:block;background:#eff4ff;border:1px solid #d6e1f5;border-radius:10px;margin:1rem 0;color:#26344a;font-size:.83rem }.policy>summary { cursor:pointer;padding:.85rem;display:flex;align-items:center;gap:.6rem;flex-wrap:wrap }.policy>summary span { color:#596474 }.policy-body { border-top:1px solid #d6e1f5;padding:0 .85rem .85rem }.policy pre,.metrics pre { white-space:pre-wrap;overflow-wrap:anywhere;background:white;padding:.8rem;border-radius:6px;line-height:1.5 }.policy-body details { margin-top:.75rem }.welcome { padding:2rem;background:white;border:1px solid #d9dee8;border-radius:12px;margin:1.4rem 0 }.welcome h2 { margin-top:0 }.welcome p { max-width:42rem;color:#596474;line-height:1.5 }
-  @media(max-width:650px) { .intro { gap:.5rem }.accountbar label,.accountbar select { width:100% }.intro h2 { font-size:1.5rem } }
+  .submit { position:sticky;bottom:0;justify-content:flex-end;background:#f5f7fc;padding:.35rem;border-top:1px solid #d8dfec;box-shadow:0 -4px 12px #fff }
+  .policy { display:block;background:transparent;border:0;margin:0;color:#26344a;font-size:.83rem }.policy>summary { cursor:pointer;padding:.2rem .3rem;display:flex;align-items:center;gap:.6rem;flex-wrap:wrap }.policy[open] { flex-basis:100% }.policy>summary span { color:#596474 }.policy-body { border-top:1px solid #d6e1f5;padding:0 .85rem .85rem }.policy pre,.metrics pre { white-space:pre-wrap;overflow-wrap:anywhere;background:white;padding:.8rem;border-radius:6px;line-height:1.5 }.policy-body details { margin-top:.75rem }.welcome { padding:2rem;background:white;border:1px solid #d9dee8;border-radius:12px;margin:1.4rem 0 }.welcome h2 { margin-top:0 }.welcome p { max-width:42rem;color:#596474;line-height:1.5 }
+  .overview { display:flex;align-items:center;gap:18px;flex-wrap:wrap;font-size:12px;color:#58677d;margin:6px 0 }.overview strong { color:#243a5e }.filters { font-size:11px;color:#69778b;margin:2px 0 }.filters summary { cursor:pointer }
+  @media(max-width:650px) { .accountbar label,.accountbar select { width:100% } }
 </style>

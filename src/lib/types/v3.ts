@@ -23,12 +23,13 @@ export interface PreparedMessage {
   attachmentsNotRead: boolean;
   hasUnsubscribe: boolean;
   isCalendarInvite: boolean;
-  attachments: { name: string; mime: string }[];
+  attachments: { name: string; mime: string; inline?: boolean; calendar?: boolean }[];
+  calendar?: { kind: 'response' | 'invitation' | 'update' | 'other'; eventTime: string | null; note: string | null; generatedDescription: boolean; responseOnly?: boolean; endsAt?: string | null; ended?: boolean | null };
   links: { label: string; url: string }[];
 }
 
 export interface Representation {
-  version: 1;
+  version: 1 | 2 | 3;
   threadId: string;
   messageIds: string[];
   omittedUnread: number;

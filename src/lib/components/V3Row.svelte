@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { Assessment, Representation, ReviewDecision, Handling } from '$lib/types/v3';
   type Item = {
-    id: string; thread_id: string; representation: Representation; answers: Assessment | null;
+    id: string; thread_id: string; assessment_source?: string; deterministic_rule?: string; deterministic_version?: number; representation: Representation; answers: Assessment | null;
     proposed_action: string; final_action: string; lane: string; reason: string; status: string; error: string | null;
     review_kind: string | null; review_disposition: string | null; review_action_id: string | null;
     execution_status: string | null; action_status: string | null; review_error: string | null;
@@ -10,17 +10,24 @@
     item: Item; draft?: ReviewDecision; onChange: (d: ReviewDecision | null) => void;
     onUndo: (id: string) => void; accountId: string;
   } = $props();
+  let expanded = $state(false);
   let inspect = $state(false);
   let details = $state(false);
   let full = $state(false);
   let fullContent = $state<{ messages: { id: string; from: string; date: string; html: string | null; text: string | null }[] } | null>(null);
   let fullError = $state('');
   const first = $derived(item.representation.messages[0]);
+  const sender = $derived((first?.from || 'Unknown sender').replace(/<[^>]+>/g, '').trim().replace(/^["']|["']$/g, '').trim() || first?.from || 'Unknown');
   const actionLabel: Record<string, string> = { label_todo: 'TODO', archive: 'Archive', trash: 'Trash', leave: 'Leave untouched' };
   const selected = $derived(draft?.kind === 'done' ? 'done' : draft?.disposition ?? '');
   function base(): ReviewDecision { return draft ?? { assessmentId: item.id, disposition: item.proposed_action as Handling, kind: 'approve' }; }
   function setDisposition(value: Handling) {
     onChange({ ...base(), disposition: value, kind: value === 'leave' ? 'skip' : value === item.proposed_action && item.status === 'ready' ? 'approve' : 'correct', finalDisposition: undefined });
+  }
+  function choose(value: string) {
+    if (!value) onChange(null);
+    else if (value === 'done') setDone();
+    else setDisposition(value as Handling);
   }
   function setDone() { onChange({ ...base(), disposition: 'leave', kind: 'done', finalDisposition: item.final_action as Handling }); }
   async function viewFull() {
@@ -35,20 +42,34 @@
 </script>
 
 <article class:chosen={!!draft} class:reviewed={!!item.review_kind}>
-  <div class="top">
-    <div class="heading">
-      <strong>{first?.subject || '(no subject)'}</strong>
-      <span>{first?.from || 'Unknown sender'}</span>
+  <div class="mail-row">
+    <button class="expand" aria-expanded={expanded} aria-label={`${expanded ? 'Collapse' : 'Open'} ${first?.subject || 'message'}`} onclick={() => (expanded = !expanded)}>{expanded ? '−' : '+'}</button>
+    <span class="sender" title={first?.from}>{sender}</span>
+    <button class="subject" title={first?.subject} onclick={() => (expanded = !expanded)}>{first?.subject || '(no subject)'}</button>
+    {#if item.assessment_source === 'rule'}<span class="origin rule" title={`${item.deterministic_rule} · v${item.deterministic_version}`}>Rule</span>{/if}
+    <span class="reason" title={`${item.reason}${item.error ? ` · ${item.error}` : ''}`}>{item.reason.replace(/^(notification|newsletter|sales|conversation|transaction|other) · /, '')}</span>
+    {#if item.review_kind}
+      <span class="status">{actionLabel[item.review_disposition ?? ''] ?? item.review_disposition} · {item.action_status ?? item.execution_status}</span>
+      {#if item.review_action_id && item.action_status === 'applied'}<button onclick={() => onUndo(item.review_action_id!)}>Undo</button>{/if}
+    {:else}
+      <select aria-label={`Decision for ${first?.subject || 'message'}`} value={selected} onchange={(e) => choose(e.currentTarget.value)}>
+        <option value="">{item.status === 'unresolved' ? 'Choose…' : item.lane === 'show_me' ? 'Show first' : `${actionLabel[item.proposed_action]}?`}</option>
+        <option value="label_todo">TODO</option><option value="archive">Archive</option><option value="trash">Trash</option><option value="leave">Leave</option><option value="done">Handled</option>
+      </select>
+      {#if draft?.kind === 'done'}<select aria-label="After completion" value={draft.finalDisposition} onchange={(e) => onChange({ ...draft!, finalDisposition: e.currentTarget.value as Handling })}><option value="archive">Archive</option><option value="trash">Trash</option><option value="leave">Leave</option></select>{/if}
+      {#if draft && item.lane === 'show_me'}<label class="ack" title="I saw this message"><input type="checkbox" checked={draft.acknowledged ?? false} onchange={(e) => onChange({ ...draft!, acknowledged: e.currentTarget.checked })} /> Seen</label>{/if}
+    {/if}
+  </div>
+  {#if expanded}
+  <div class="detail-panel">
+    <p class="addresses">{first?.from} → {first?.to} · {first?.date}</p>
+    <p>{item.assessment_source === 'rule' ? `Rule: ${item.deterministic_rule} · version ${item.deterministic_version}. ` : ''}{item.reason}{item.error ? ` · ${item.error}` : ''}</p>
+    <pre class="preview">{first?.body || 'Message content unavailable.'}</pre>
+    <div class="row-actions">
+      <button onclick={viewFull}>{full ? 'Hide full message' : 'Read full message'}</button>
+      <button onclick={() => (inspect = !inspect)}>{inspect ? 'Hide Jev input' : 'What Jev read'}</button>
+      <button onclick={() => (details = !details)}>{details ? 'Hide assessment' : 'Why this suggestion'}</button>
     </div>
-    <span class="status">{item.review_kind ? `${actionLabel[item.review_disposition ?? ''] ?? item.review_disposition} · ${item.action_status ?? item.execution_status}` : item.status === 'unresolved' ? 'Needs your decision' : `Suggested: ${actionLabel[item.proposed_action]}`}</span>
-  </div>
-  <p class="reason">{item.reason}{item.error ? ` · ${item.error}` : ''}</p>
-  <div class="row-actions">
-    <button onclick={viewFull}>{full ? 'Hide message' : 'Read full message'}</button>
-    <button onclick={() => (inspect = !inspect)}>{inspect ? 'Hide Jev input' : 'What Jev read'}</button>
-    <button onclick={() => (details = !details)}>{details ? 'Hide details' : 'Why this suggestion'}</button>
-    {#if item.review_action_id && item.action_status === 'applied'}<button onclick={() => onUndo(item.review_action_id!)}>Undo</button>{/if}
-  </div>
   {#if inspect}<pre class="evidence">{JSON.stringify(item.representation, null, 2)}</pre>{/if}
   {#if details}
     {#if item.answers}<p class="facts">Attention: {item.answers.attention.choice} · Keep afterward: {item.answers.retention.choice} · Urgency: {item.answers.attention.choice === 'none' ? 'N/A' : item.answers.urgency.score.toFixed(1)} · Relevance: {item.answers.relevance.score.toFixed(1)}</p>{/if}
@@ -66,49 +87,30 @@
       {/each}
     {:else}<p>Loading full message…</p>{/if}
   {/if}
-  {#if !item.review_kind}
-    <div class="review-controls">
-      <span class="decision-label">Your decision</span>
-      <div class="choices">
-        <button class:active={selected === 'label_todo'} onclick={() => setDisposition('label_todo')}>Keep in TODO</button>
-        <button class:active={selected === 'archive'} onclick={() => setDisposition('archive')}>Archive</button>
-        <button class:active={selected === 'trash'} onclick={() => setDisposition('trash')}>Trash</button>
-        <button class:active={selected === 'leave'} onclick={() => setDisposition('leave')}>Leave as is</button>
-        <button class:active={selected === 'done'} onclick={setDone}>Already handled</button>
-        {#if draft}<button class="clear" onclick={() => onChange(null)}>Clear choice</button>{/if}
+    {#if draft && !item.review_kind}
+      <div class="feedback">
+        <label>Feedback <select value={draft.chip ?? ''} onchange={(e) => onChange({ ...draft!, chip: e.currentTarget.value as ReviewDecision['chip'] || undefined })}>
+          <option value="">None</option><option value="already_handled">Already handled</option><option value="other_owner">Someone else owns it</option><option value="worth_reading">Worth reading</option><option value="actual_receipt">Actual receipt</option><option value="show_before_clearing">Show before clearing</option>
+        </select></label>
+        <label>Note <input value={draft.note ?? ''} placeholder="Optional" oninput={(e) => onChange({ ...draft!, note: e.currentTarget.value })} /></label>
       </div>
-      {#if draft?.kind === 'done'}
-        <label>After completion
-          <select value={draft.finalDisposition} onchange={(e) => onChange({ ...draft!, finalDisposition: e.currentTarget.value as Handling })}>
-            <option value="archive">Archive</option><option value="trash">Trash</option><option value="leave">Leave untouched</option>
-          </select>
-        </label>
-      {/if}
-      {#if draft}
-        {#if item.lane === 'show_me' || draft.disposition === 'trash'}<label class="ack"><input type="checkbox" checked={draft.acknowledged ?? false} onchange={(e) => onChange({ ...draft!, acknowledged: e.currentTarget.checked })} /> I saw this message</label>{/if}
-        <details class="feedback"><summary>Add feedback or a note</summary><label>Feedback
-          <select value={draft.chip ?? ''} onchange={(e) => onChange({ ...draft!, chip: e.currentTarget.value as ReviewDecision['chip'] || undefined })}>
-            <option value="">None</option><option value="already_handled">Already handled</option><option value="other_owner">Someone else owns it</option><option value="worth_reading">Worth reading</option><option value="actual_receipt">Actual receipt</option><option value="show_before_clearing">Show before clearing</option>
-          </select>
-        </label>
-        <label class="note">Note <input value={draft.note ?? ''} placeholder="Optional" oninput={(e) => onChange({ ...draft!, note: e.currentTarget.value })} /></label></details>
-      {/if}
-    </div>
+    {/if}
+  </div>
   {/if}
 </article>
 
 <style>
-  article { background:#fff;border:1px solid #d9dee8;border-radius:10px;padding:.9rem;margin:.55rem 0;box-shadow:0 1px 2px #182b4420 }
-  article.chosen { border-color:#516bc7;background:#fafbff } article.reviewed { opacity:.78 }
-  .top,.row-actions,.review-controls { display:flex;align-items:center;gap:.7rem;flex-wrap:wrap }
-  .top { justify-content:space-between } .heading { display:flex;flex-direction:column;gap:.15rem;min-width:0 }
-  .heading strong { overflow-wrap:anywhere } .heading span,.facts,.reason { color:#596474;font-size:.85rem;margin:.35rem 0 }
-  .status { background:#eef1f8;color:#394a69;border-radius:99px;padding:.2rem .55rem;font-size:.76rem }
-  button,select,input { border:1px solid #c6cedc;border-radius:6px;padding:.32rem .5rem;background:white;color:#26344a;font:inherit }
-  button { cursor:pointer } .row-actions { margin:.6rem 0 } .row-actions button { font-size:.75rem }
-  .review-controls { border-top:1px solid #e7eaf1;padding-top:.8rem;font-size:.8rem;display:block }.decision-label { display:block;font-weight:700;margin-bottom:.45rem;color:#38455a }.choices { display:flex;gap:.35rem;flex-wrap:wrap;margin-bottom:.6rem }.choices button { font-size:.79rem }.choices button.active { background:#dfe8ff;border-color:#375dc1;color:#213f91;font-weight:700 }.choices button.clear { border:0;color:#596474;text-decoration:underline }
-  .review-controls label { display:flex;align-items:center;gap:.35rem;margin:.45rem 0 }.ack input { accent-color:#4563b3 }.feedback { margin:.45rem 0;color:#596474 }.feedback summary { cursor:pointer }
-  .note input { min-width:12rem } .evidence { white-space:pre-wrap;overflow-wrap:anywhere;max-height:22rem;overflow:auto;background:#f4f6fa;padding:.7rem;font-size:.75rem }
-  iframe { width:100%;height:25rem;border:1px solid #d9dee8;background:white }.error { color:#ac2b21 }
-  .full-message { border-top:1px solid #d9dee8;padding:.6rem 0;font-size:.8rem }
+  article { border-bottom:1px solid #e1e5ec;background:#fff } article.chosen { background:#edf3ff } article.reviewed { color:#667085 }
+  .mail-row { display:flex;align-items:center;gap:8px;height:23px;padding:0 6px;font-size:12px }
+  button,select,input { font:inherit;color:inherit } button { cursor:pointer } .expand { border:0;background:none;width:18px;flex-shrink:0;padding:0;color:#64748b }
+  .origin { font-size:10px;border-radius:3px;padding:1px 4px;color:#576b8c;background:#edf1f8;flex-shrink:0 }.origin.rule { color:#326960;background:#e8f3ef }
+  .sender { width:150px;flex-shrink:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#465366 }
+  .subject { flex:1;min-width:0;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border:0;background:none;padding:0;font-weight:500 }
+  .subject:hover { text-decoration:underline }.reason { color:#69778b;width:185px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:11px }
+  .mail-row select { width:88px;flex-shrink:0;background:transparent;border:1px solid #ccd5e2;border-radius:3px;height:21px;padding:0 3px }
+  .chosen .mail-row select { border-color:#5578c5;color:#244994;background:#f7faff }.ack { display:flex;align-items:center;gap:2px;font-size:11px }.ack input { margin:0;accent-color:#4563b3 }.status { font-size:11px }
+  .detail-panel { padding:10px 34px;border-top:1px solid #e1e5ec;font-size:13px }.detail-panel p { margin:4px 0 8px }.addresses { color:#69778b }.row-actions,.feedback,.feedback label { display:flex;align-items:center;gap:8px;flex-wrap:wrap }.row-actions button,.feedback input,.feedback select { border:1px solid #c6cedc;background:#fff;border-radius:4px;padding:4px 7px }.feedback { margin-top:10px }
+  .preview,.evidence { white-space:pre-wrap;overflow-wrap:anywhere;max-height:22rem;overflow:auto;background:#f4f6fa;padding:10px;font:12px/1.5 ui-monospace,monospace }.preview { max-height:12rem }
+  iframe { width:100%;height:25rem;border:1px solid #d9dee8;background:white }.error { color:#ac2b21 }.full-message { border-top:1px solid #d9dee8;padding:.6rem 0 }.facts { color:#596474 }
+  @media(max-width:900px) { .sender { width:115px }.reason { width:130px } } @media(max-width:650px) { .reason { display:none }.sender { width:90px }.mail-row { height:32px } }
 </style>

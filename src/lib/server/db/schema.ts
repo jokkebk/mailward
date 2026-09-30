@@ -335,6 +335,9 @@ export const v3Policies = sqliteTable('v3_policies', {
 }, (t) => ({ accountVersion: uniqueIndex('idx_v3_policy_account_version').on(t.accountId, t.versionNo) }));
 
 export const v3Assessments = sqliteTable('v3_assessments', {
+  assessmentSource: text('assessment_source').notNull().default('jev'),
+  deterministicRule: text('deterministic_rule'),
+  deterministicVersion: integer('deterministic_version'),
   id: text('id').primaryKey(),
   accountId: text('account_id').notNull().references(() => tokens.id),
   threadId: text('thread_id').notNull(),

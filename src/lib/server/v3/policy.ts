@@ -37,8 +37,8 @@ export function getOrCreatePolicy(sqlite: Database, accountId: string): PolicyRe
   };
   const text = personalized ? AUDIT_POLICY : STARTER_POLICY;
   const id = crypto.randomUUID();
-  sqlite.query('INSERT INTO v3_policies (id, account_id, version_no, text, rubric_version, status, import_report, created_by, created_at) VALUES (?, ?, 1, ?, 1, ?, ?, ?, ?)').run(id, accountId, text, 'proposed', JSON.stringify(report), personalized ? 'v2-curated-import' : 'bootstrap', Date.now());
-  return { id, version_no: 1, text, rubric_version: 1, status: 'proposed', import_report: JSON.stringify(report) };
+  sqlite.query('INSERT INTO v3_policies (id, account_id, version_no, text, rubric_version, status, import_report, created_by, created_at) VALUES (?, ?, 1, ?, 2, ?, ?, ?, ?)').run(id, accountId, text, 'proposed', JSON.stringify(report), personalized ? 'v2-curated-import' : 'bootstrap', Date.now());
+  return { id, version_no: 1, text, rubric_version: 2, status: 'proposed', import_report: JSON.stringify(report) };
 }
 
 /** Explicit replacement for offline learning; never changes automation status. */
@@ -48,7 +48,7 @@ export function createPolicyRevision(sqlite: Database, accountId: string, text: 
   const current = getOrCreatePolicy(sqlite, accountId);
   const id = crypto.randomUUID();
   const version = current.version_no + 1;
-  const report = JSON.stringify({ previousPolicyId: current.id, note, automationInherited: false });
-  sqlite.query('INSERT INTO v3_policies (id, account_id, version_no, text, rubric_version, status, import_report, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(id, accountId, version, text.trim(), current.rubric_version, 'proposed', report, actor, Date.now());
-  return { id, version_no: version, text: text.trim(), rubric_version: current.rubric_version, status: 'proposed', import_report: report };
+  const report = JSON.stringify({ ...JSON.parse(current.import_report ?? '{}'), previousPolicyId: current.id, note, automationInherited: false });
+  sqlite.query('INSERT INTO v3_policies (id, account_id, version_no, text, rubric_version, status, import_report, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(id, accountId, version, text.trim(), 2, 'proposed', report, actor, Date.now());
+  return { id, version_no: version, text: text.trim(), rubric_version: 2, status: 'proposed', import_report: report };
 }

@@ -7,9 +7,10 @@ import { handleReauthCleanup } from '../gmail/reauth';
 import { extractBody } from '../gmail/content';
 import { sanitizeHtml } from '../gmail/sanitize';
 import { applyThreadAction, undoAction } from '../triage/apply';
+import { deterministicHandling, saveDeterministicAssessment, CALENDAR_RESPONSE_RULE } from './deterministic';
 import { getOrCreatePolicy } from './policy';
 import { callJev, resolveHandling, RUBRIC_VERSION, V3_MODEL } from './assessment';
-import { prepareThread } from './representation';
+import { prepareThread, REPRESENTATION_VERSION } from './representation';
 import type { Assessment, Representation, ReviewDecision } from '$lib/types/v3';
 
 export function openV3Database(path = process.env.DATABASE_PATH || './data/emails.db'): Database {
@@ -22,6 +23,7 @@ const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(valu
 const parse = <T>(json: string): T => JSON.parse(json) as T;
 function cacheContext(rep: Representation): string | null {
   const text = rep.messages.map((m) => `${m.subject} ${m.body}`).join(' ');
+  if (rep.messages.some((m) => m.isCalendarInvite)) return JSON.stringify({ day: new Date().toISOString().slice(0, 10), ended: rep.messages.map((m) => m.calendar?.endsAt ? Date.parse(m.calendar.endsAt) <= Date.now() : null) });
   if (!/\b(today|tomorrow|deadline|due|by (?:mon|tues|wednes|thurs|fri|satur|sun)day|tänään|huomenna|mennessä|erääntyy)\b/i.test(text)) return null;
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Helsinki', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
 }
@@ -51,7 +53,11 @@ export function listRun(accountId: string, runId?: string) {
       WHERE i.run_id = ? AND a.account_id = ? ORDER BY a.priority DESC, a.created_at DESC, a.id`).all(run.id, accountId) as any[];
     const calls = sqlite.query('SELECT model, thread_count, prompt_chars, input_tokens, output_tokens, duration_ms, status, error FROM v3_call_logs WHERE run_id = ?').all(run.id);
     const steps = sqlite.query("SELECT stage, duration_ms, status, total, error FROM run_steps WHERE run_id = ? AND rule_id IS NULL ORDER BY started_at").all(run.id);
-    return { run, policy, items: items.map((a) => ({ ...a, representation: parse<Representation>(a.representation), answers: a.answers ? parse<Assessment>(a.answers) : null })), calls, steps };
+    const replayStep = (steps as any[]).find((step) => step.stage.startsWith('v3_replay:'));
+    const replaySource = replayStep ? sqlite.query('SELECT started_at FROM runs WHERE id=?').get(replayStep.stage.slice('v3_replay:'.length)) as any : null;
+    const assessedPolicy = items[0] ? sqlite.query('SELECT * FROM v3_policies WHERE id=?').get(items[0].policy_id) : null;
+    const replay = replaySource ? { sourceRunId: replayStep.stage.slice('v3_replay:'.length), assessedAt: replaySource.started_at } : null;
+    return { run, policy: assessedPolicy ?? policy, deterministicRules: [CALENDAR_RESPONSE_RULE], replay, items: items.map((a) => ({ ...a, representation: parse<Representation>(a.representation), answers: a.answers ? parse<Assessment>(a.answers) : null })), calls, steps };
   } finally { sqlite.close(); }
 }
 
@@ -59,7 +65,7 @@ function recentRepresentation(sqlite: Database, accountId: string, threadId: str
   const rows = sqlite.query('SELECT representation FROM v3_assessments WHERE account_id = ? AND thread_id = ? ORDER BY created_at DESC LIMIT 8').all(accountId, threadId) as { representation: string }[];
   for (const row of rows) {
     const rep = parse<Representation>(row.representation);
-    if (rep.version === 1 && JSON.stringify(rep.messageIds) === JSON.stringify(ids.slice(0, 4)) && rep.omittedUnread === Math.max(0, ids.length - 4) && rep.unavailable.length === 0) return rep;
+    if (rep.version === REPRESENTATION_VERSION && JSON.stringify(rep.messageIds) === JSON.stringify(ids.slice(0, 4)) && rep.omittedUnread === Math.max(0, ids.length - 4) && rep.unavailable.length === 0) return rep;
   }
   return null;
 }
@@ -137,19 +143,19 @@ async function assessAccount(accountId: string, runId: string, limit: number) {
       }
       upsertThread(sqlite, accountId, rep);
       const key = hash({ rep, contextDate: cacheContext(rep) });
+      if (deterministicHandling(rep)) {
+        saveDeterministicAssessment(sqlite, accountId, runId, policy.id, RUBRIC_VERSION, rep, key);
+        return;
+      }
       const cached = sqlite.query('SELECT id FROM v3_assessments WHERE account_id = ? AND thread_id = ? AND input_key = ? AND policy_id = ? AND rubric_version = ? AND model = ? AND answers IS NOT NULL AND error IS NULL ORDER BY created_at DESC LIMIT 1').get(accountId, threadId, key, policy.id, RUBRIC_VERSION, V3_MODEL) as { id: string } | null;
       if (cached) sqlite.query('INSERT OR IGNORE INTO v3_run_items (run_id, assessment_id) VALUES (?, ?)').run(runId, cached.id);
       else fresh.push({ rep, key });
     });
     recordStage(sqlite, accountId, runId, 'v3_fetch_prepare', fetchStarted, 'completed', entries.length);
     const assessStarted = Date.now();
-    // Token-aware cap: ten threads or about 35k serialized state characters per call.
-    const batches: typeof fresh[] = [];
-    for (const item of fresh) {
-      const last = batches.at(-1);
-      if (!last || last.length >= 10 || JSON.stringify(last.map((x) => x.rep)).length + JSON.stringify(item.rep).length > 35000) batches.push([item]);
-      else last.push(item);
-    }
+    // Shared multi-thread state produced cross-thread interference in the
+    // September audit. Keep all six questions together, but isolate each thread.
+    const batches = fresh.map((item) => [item]);
     await mapLimit(batches, 4, async (batch) => {
       const started = performance.now();
       try {
