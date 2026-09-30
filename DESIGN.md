@@ -1,5 +1,27 @@
 # Mailward — Design
 
+## Shipped v3 path
+
+The `/v3` route is an assessment-based, review-first path beside the legacy
+rule-centric UI at `/`. Its additive SQLite tables are `v3_policies`,
+`v3_assessments`, `v3_run_items`, `v3_reviews`, and `v3_call_logs`. A run links
+one assessment snapshot per thread; switching views never asks Jev again.
+Input identity includes message representation, policy, rubric, requested model,
+and a local date bucket for text with deadline cues. Partial model failures
+become unresolved rows. The backend service in `src/lib/server/v3/service.ts`
+owns runs, listing, reviewed-set validation, execution, and undo. The v2
+`applyThreadAction` and `undoAction` ledger remains the sole Gmail mutation path.
+
+V3 maps act/read to TODO, with separate Needs action and Worth checking out
+lanes; glance mail must be shown before clearing; no-attention mail maps to
+archive or trash from retention. A human can override every row. Completion,
+correction, skip, and execution have separate fields. V3 never promotes itself
+to automation. The compact policy revision service replaces the policy text
+instead of appending a growing example history to each request.
+
+The rest of this document describes the preserved v2 rule engine and its
+historical design choices. See `V3.md` for v3's full plan and limits.
+
 An email triage agent for cleaning up Gmail unread mail. AI proposes deletion / archival /
 labelling against triage rules; you approve, amend, or reject; rules that prove themselves get
 promoted to auto-apply. All actions are logged and reversible. A separate, smarter offline

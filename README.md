@@ -1,16 +1,47 @@
 # Mailward
 
-An email triage agent for cleaning up Gmail unread mail. You run it; it proposes
-deletion / archival / labelling against triage rules; you approve, amend, or reject.
-Proven rules later graduate to auto-apply. Everything is logged and reversible.
+An email triage agent for unread Gmail. V3 assesses each thread once and offers
+Action board, Briefing, and Exceptions views over the same review set. You decide
+what to do; Gmail changes are logged and reversible.
 
 See [DESIGN.md](DESIGN.md) for the full design and roadmap.
 
-The [v3 architecture and implementation plan](V3.md) describes the upcoming
-assessment-based engine and three shared review views. Git tag `v2` preserves the
-current rule-centric baseline.
+The [v3 architecture and implementation plan](V3.md) records the design. Git tag
+`v2` preserves the rule-centric baseline, still available at `/` for comparison.
 
-## Current workflow
+## V3 workflow
+
+Open `/v3`, select an account, and choose **Assess unread mail**. V3 fetches full
+unread message content for new snapshots, prepares a bounded plain-text record,
+and asks Jev six typed questions per thread in batches: category, attention,
+retention, urgency, relevance, and evidence gap. A compact versioned policy is
+shared once per batch. Up to four batches run concurrently. Missing or malformed
+evidence stays unresolved. Existing snapshots are reused when the message,
+policy, rubric, model, and relevant date context match.
+
+Switch among **Action board**, **Briefing**, and **Exceptions**. Needs action and
+Worth checking out stay separate in every view. Choose Trash, Archive, TODO,
+Leave untouched, or Done/handled per row. Done requires a final handling choice.
+Notes and feedback chips are optional. **Apply reviewed set** is the only Gmail
+mutation step; view changes and priority controls are display only. Show-before-
+clearing mail needs an explicit “I saw this” acknowledgement before trash.
+Rows offer the exact representation Jev saw and an on-demand sanitized view of
+the full conversation. Individual applied actions can be undone. V3 imports no
+automation trust from legacy rules, and a new policy revision stays review-first.
+
+For a fixture-only preview, run `bun run scripts/v3-fixture.ts /tmp/mailward-v3-fixture.db`
+and start the app with `DATABASE_PATH=/tmp/mailward-v3-fixture.db` and dummy OAuth
+environment values. The fixture cannot mutate live Gmail. For offline learning,
+`DATABASE_PATH=... bun run v3-report <accountId>` prints policy lineage, assessment
+mix, corrections, completion, execution, undo, and usage. Keep examples in a
+separate local evaluation corpus and validate revisions against held-out cases.
+
+V3 currently has no auto-apply or policy-promotion workflow. Explicit larger-
+representation reassessment, richer calibration studies, and CLI/MCP adapters
+remain follow-up work. Do not use the legacy v2 auto-apply mode as a substitute
+for v3 review.
+
+## Legacy v2 workflow
 
 Mailward combines deterministic and AI rules, with a review step for proposals:
 

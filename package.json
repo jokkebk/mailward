@@ -11,6 +11,7 @@
 		"test": "bun test",
 		"rules": "bun run scripts/rules.ts",
 		"review-data": "bun run scripts/review-data.ts",
+		"v3-report": "bun run scripts/v3-report.ts",
 		"apply-proposals": "bun run scripts/apply-proposals.ts"
 	},
 	"devDependencies": {

@@ -1,5 +1,29 @@
 # Mailward
 
+## V3 language
+
+**Assessment**: A durable snapshot of Jev's typed judgments and full distributions
+for one thread representation under a specific policy, rubric, and model. It is
+separate from a review decision and from Gmail execution.
+
+**Needs action**: Mail requiring the user's action, reply, or decision. It stays
+visible as TODO until explicitly completed or otherwise reviewed.
+
+**Worth checking out**: Relevant mail worth reading without an obligation. It
+also stays visible as TODO, in its own lane.
+
+**Show me**: Mail that warrants a glance before clearing. Seeing it in a model
+result does not count as human acknowledgement.
+
+**Done/handled**: A review event saying the attention was satisfied. Its chosen
+final handling may archive, trash, or leave the thread untouched. It is not a
+classifier correction.
+
+**V3 correction**: A different per-email disposition than the proposal, with an
+optional chip or note. It is instance feedback, not a new global rule.
+
+The definitions below describe the still-available v2 rule-centric path.
+
 Mailward is an email triage context where rules propose reversible actions for human review and eventual automation.
 
 ## Language

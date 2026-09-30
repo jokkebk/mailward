@@ -820,6 +820,7 @@
 </script>
 
 <div class="workspace-top">
+	<a href="/v3" style="display:inline-block;margin-bottom:.5rem;color:#2855aa;font-weight:600">Open Mailward v3 review →</a>
 <div class="bar">
 	{#if accounts.length}
 		<select onchange={(e) => selectAccount((e.target as HTMLSelectElement).value)} value={accountId}>

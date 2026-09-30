@@ -4,6 +4,14 @@ Email triage agent (the agentic successor to mailnick). You run it; it proposes
 trash/archive/TODO actions against versioned rules; you approve/amend/reject; proven
 rules graduate to auto-apply. All actions logged + reversible. See DESIGN.md.
 
+- **V3 review**: `/v3` assesses unread threads once with a compact policy and
+  Jev; Action board, Briefing, and Exceptions share a reviewed set. Initial v3
+  never auto-applies. `src/lib/server/v3/service.ts` is the service boundary.
+- **V3 tables**: `v3_policies`, `v3_assessments`, `v3_run_items`, `v3_reviews`,
+  `v3_call_logs`; additive migration `drizzle/0007_v3.sql`.
+- **V3 fixture**: `bun run scripts/v3-fixture.ts /tmp/mailward-v3-fixture.db`.
+  Never run implementation tests against the original live database.
+
 - **Dev server**: `bun run dev` (port 4873)
 - **Database**: `./data/emails.db` (SQLite). One file = whole system state.
 - **Schema**: `src/lib/server/db/schema.ts` — snake_case columns. Key tables:
