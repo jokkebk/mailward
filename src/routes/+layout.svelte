@@ -8,8 +8,7 @@
 
 <div class="shell">
 	<header>
-		<h1>📬 Mailward</h1>
-		<span class="tag" title={`Built ${__BUILD_ID__}`}>v{__APP_VERSION__} · build {__BUILD_ID__} UTC</span>
+		<h1>Mailward</h1>
 	</header>
 	{@render children()}
 </div>
@@ -22,7 +21,7 @@
 		color: #1d2330;
 	}
 	.shell {
-		max-width: 880px;
+		max-width: 1120px;
 		margin: 0 auto;
 		padding: 1rem 1.25rem 4rem;
 	}
@@ -35,12 +34,5 @@
 	header h1 {
 		font-size: 1.4rem;
 		margin: 0;
-	}
-	.tag {
-		font-size: 0.75rem;
-		color: #6b7280;
-		background: #e9ebef;
-		padding: 0.15rem 0.5rem;
-		border-radius: 999px;
 	}
 </style>

@@ -10,26 +10,35 @@ Reminders: Some recurring reminders only need to be seen before clearing. Their 
 Retention: Keep records and valuable references. Disposable notifications, stale promotions, and routine digests can be trashed after any required attention. Do not infer urgency from wording alone; evaluate actual consequence and date.
 When body or context is missing, choose unclear attention/retention or an evidence gap. Prefer review to a confident destructive proposal.`;
 
+/** Curated from Alex's current v2 rule versions and review notes, 2026-09-30. */
+export const AUDIT_POLICY = `Personal policy removed from the public history.`;
+
+const AUDIT_ACCOUNT = 'alex@acme.test';
+
 export interface PolicyRecord { id: string; version_no: number; text: string; rubric_version: number; status: string; import_report: string | null }
 
 export function getOrCreatePolicy(sqlite: Database, accountId: string): PolicyRecord {
   const existing = sqlite.query('SELECT id, version_no, text, rubric_version, status, import_report FROM v3_policies WHERE account_id = ? ORDER BY version_no DESC LIMIT 1').get(accountId) as PolicyRecord | null;
   if (existing) return existing;
-  const rules = sqlite.query(`SELECT r.name, v.action, v.intent, v.change_note FROM rules r JOIN rule_versions v ON r.current_version_id = v.id WHERE r.account_id = ?`).all(accountId) as { name: string; action: string; intent: string | null; change_note: string | null }[];
+  const rules = sqlite.query(`SELECT r.name, r.status, v.action, v.intent, v.change_note FROM rules r JOIN rule_versions v ON r.current_version_id = v.id WHERE r.account_id = ?`).all(accountId) as { name: string; status: string; action: string; intent: string | null; change_note: string | null }[];
   const conflicts = rules.filter((r) => (r.action === 'trash' && /surface as TODO|keep|archive for reference/i.test(r.intent ?? '')) || (r.action === 'archive' && /surface as TODO|trash/i.test(r.intent ?? '')));
   const verdictCounts = sqlite.query('SELECT verdict, COUNT(*) AS count FROM verdicts WHERE account_id = ? GROUP BY verdict').all(accountId);
   const manualActionCounts = sqlite.query("SELECT action, COUNT(*) AS count FROM actions WHERE account_id = ? AND mode = 'manual' GROUP BY action").all(accountId);
+  const personalized = accountId.toLowerCase() === AUDIT_ACCOUNT && rules.some((r) => r.name === 'Receipts') && rules.some((r) => r.name === 'Shared developer mailbox cleanup');
   const report = {
+    personalized,
     sourceRuleCount: rules.length,
     verdictCounts,
     manualActionCounts,
     conflictingDescriptions: conflicts.map((r) => ({ name: r.name, latestAction: r.action, issue: 'Current intent text conflicts with latest action; no sender rule imported.' })),
-    treatment: 'Starter policy consolidates durable patterns. Latest actions and feedback inform it, but contradictory and one-off outcomes remain review evidence. Legacy rules and history are untouched.',
+    sourceRules: rules.map(({ name, status, action }) => ({ name, status, action })),
+    treatment: 'The proposed policy summarizes current v2 rules and review notes. Conflicting descriptions are reconciled using their latest action and change note. One-off outcomes remain review evidence. Legacy rules and history are untouched.',
     automationInherited: false
   };
+  const text = personalized ? AUDIT_POLICY : STARTER_POLICY;
   const id = crypto.randomUUID();
-  sqlite.query('INSERT INTO v3_policies (id, account_id, version_no, text, rubric_version, status, import_report, created_by, created_at) VALUES (?, ?, 1, ?, 1, ?, ?, ?, ?)').run(id, accountId, STARTER_POLICY, 'proposed', JSON.stringify(report), 'bootstrap', Date.now());
-  return { id, version_no: 1, text: STARTER_POLICY, rubric_version: 1, status: 'proposed', import_report: JSON.stringify(report) };
+  sqlite.query('INSERT INTO v3_policies (id, account_id, version_no, text, rubric_version, status, import_report, created_by, created_at) VALUES (?, ?, 1, ?, 1, ?, ?, ?, ?)').run(id, accountId, text, 'proposed', JSON.stringify(report), personalized ? 'v2-curated-import' : 'bootstrap', Date.now());
+  return { id, version_no: 1, text, rubric_version: 1, status: 'proposed', import_report: JSON.stringify(report) };
 }
 
 /** Explicit replacement for offline learning; never changes automation status. */

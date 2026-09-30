@@ -7,11 +7,11 @@ what to do; Gmail changes are logged and reversible.
 See [DESIGN.md](DESIGN.md) for the full design and roadmap.
 
 The [v3 architecture and implementation plan](V3.md) records the design. Git tag
-`v2` preserves the rule-centric baseline, still available at `/` for comparison.
+`v2` preserves the rule-centric baseline, still available at `/v2` for comparison.
 
 ## V3 workflow
 
-Open `/v3`, select an account, and choose **Assess unread mail**. V3 fetches full
+Open `/`, select your Gmail account, and choose **Check unread mail**. V3 fetches full
 unread message content for new snapshots, prepares a bounded plain-text record,
 and asks Jev six typed questions per thread in batches: category, attention,
 retention, urgency, relevance, and evidence gap. A compact versioned policy is

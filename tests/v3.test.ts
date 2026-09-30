@@ -72,4 +72,23 @@ describe('v3 content and handling', () => {
     expect(sqlite.query("SELECT name FROM sqlite_master WHERE name = 'actions'").get()).toBeTruthy();
     sqlite.close();
   });
+  test('Acme bootstrap gives Jev a policy grounded in existing rules', () => {
+    const sqlite = new Database(':memory:');
+    migrate(drizzle(sqlite), { migrationsFolder: 'drizzle' });
+    const account = 'alex@acme.test';
+    sqlite.query('INSERT INTO tokens (id,access_token,refresh_token,expires_at) VALUES (?,?,?,?)').run(account, 'x', 'y', 1);
+    for (const [index, name, action] of [[1, 'Receipts', 'label_todo'], [2, 'Shared developer mailbox cleanup', '["trash","label_todo"]']] as const) {
+      sqlite.query('INSERT INTO rules (id,account_id,name,status,current_version_id,created_at,updated_at) VALUES (?,?,?,?,?,?,?)').run(`r${index}`, account, name, 'proposing', `v${index}`, 1, 1);
+      sqlite.query('INSERT INTO rule_versions (id,rule_id,version_no,priority,match_criteria,intent,action,tier,created_at) VALUES (?,?,?,?,?,?,?,?,?)').run(`v${index}`, `r${index}`, 1, index, '{}', name, action, 'ai', 1);
+    }
+    const policy = getOrCreatePolicy(sqlite, account);
+    const report = JSON.parse(policy.import_report!);
+    expect(report.personalized).toBe(true);
+    expect(report.sourceRuleCount).toBe(2);
+    expect(policy.text).toContain('devs@acme.test');
+    expect(policy.text).toContain('receipt');
+    const payload = buildAssessmentRequest([], policy.text);
+    expect(payload.state.policy).toBe(policy.text);
+    sqlite.close();
+  });
 });

@@ -37,16 +37,18 @@ export interface AssessmentRow {
 export function listRun(accountId: string, runId?: string) {
   const sqlite = openV3Database();
   try {
+    const account = sqlite.query('SELECT id FROM tokens WHERE id = ?').get(accountId);
+    if (!account) throw new ReviewError('Account not connected', 404);
+    const policy = getOrCreatePolicy(sqlite, accountId);
     const run = (runId
       ? sqlite.query("SELECT * FROM runs WHERE id = ? AND account_id = ? AND scope = 'v3'").get(runId, accountId)
       : sqlite.query("SELECT * FROM runs WHERE account_id = ? AND scope = 'v3' ORDER BY started_at DESC LIMIT 1").get(accountId)) as any;
-    if (!run) return { run: null, policy: null, items: [], calls: [] };
+    if (!run) return { run: null, policy, items: [], calls: [], steps: [] };
     const items = sqlite.query(`SELECT a.*, r.kind AS review_kind, r.disposition AS review_disposition, r.action_id AS review_action_id,
       r.execution_status, r.error AS review_error, r.final_disposition AS review_final_disposition, r.chip AS review_chip,
       x.status AS action_status FROM v3_run_items i JOIN v3_assessments a ON i.assessment_id = a.id
       LEFT JOIN v3_reviews r ON r.assessment_id = a.id LEFT JOIN actions x ON x.id = r.action_id
       WHERE i.run_id = ? AND a.account_id = ? ORDER BY a.priority DESC, a.created_at DESC, a.id`).all(run.id, accountId) as any[];
-    const policy = sqlite.query('SELECT id, version_no, rubric_version, status, import_report FROM v3_policies WHERE account_id = ? ORDER BY version_no DESC LIMIT 1').get(accountId);
     const calls = sqlite.query('SELECT model, thread_count, prompt_chars, input_tokens, output_tokens, duration_ms, status, error FROM v3_call_logs WHERE run_id = ?').all(run.id);
     const steps = sqlite.query("SELECT stage, duration_ms, status, total, error FROM run_steps WHERE run_id = ? AND rule_id IS NULL ORDER BY started_at").all(run.id);
     return { run, policy, items: items.map((a) => ({ ...a, representation: parse<Representation>(a.representation), answers: a.answers ? parse<Assessment>(a.answers) : null })), calls, steps };
