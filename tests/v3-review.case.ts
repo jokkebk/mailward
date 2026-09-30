@@ -44,6 +44,9 @@ beforeAll(() => {
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(id,'a','t',id,'p',1,'model',rep,'archive','archive','cleanup','none',1,'ready',1);
     sqlite.query('INSERT INTO v3_run_items VALUES (?,?)').run('r',id);
   }
+  sqlite.query(`INSERT INTO v3_assessments (id,account_id,thread_id,input_key,policy_id,rubric_version,model,representation,proposed_action,final_action,lane,reason,priority,status,created_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run('a3','a','t','a3','p',1,'model',rep,'leave','trash','show_me','reminder',1,'ready',1);
+  sqlite.query('INSERT INTO v3_run_items VALUES (?,?)').run('r','a3');
   sqlite.close();
 });
 afterAll(() => { try { unlinkSync(dbPath); } catch {} });
@@ -114,6 +117,15 @@ describe('v3 reviewed set', () => {
     expect(results[0].status).toBe('no_action');
     const sqlite = db();
     expect((sqlite.query("SELECT action_id FROM v3_reviews WHERE assessment_id = 'a2'").get() as any).action_id).toBeNull();
+    sqlite.close();
+  });
+  test('show-before-clearing approves its final handling only once seen', async () => {
+    await expect(submitReviewedSet('a','r',[{ assessmentId:'a3', kind:'approve', disposition:'trash' }])).rejects.toBeInstanceOf(ReviewError);
+    const results = await submitReviewedSet('a','r',[{ assessmentId:'a3', kind:'approve', disposition:'trash', acknowledged: true }]);
+    expect(results[0].status).toBe('applied');
+    expect(mutations.at(-1)).toBe('trash:t');
+    const sqlite = db();
+    expect((sqlite.query("SELECT kind, acknowledged FROM v3_reviews WHERE assessment_id = 'a3'").get() as any)).toEqual({ kind: 'approve', acknowledged: 1 });
     sqlite.close();
   });
 });

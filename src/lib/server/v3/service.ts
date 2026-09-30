@@ -208,7 +208,10 @@ export async function submitReviewedSet(accountId: string, runId: string, decisi
       const current = sqlite.query('SELECT message_ids FROM threads WHERE id = ? AND account_id = ?').get(row.thread_id, accountId) as { message_ids: string } | null;
       if (!current || JSON.stringify(parse<Representation>(row.representation).messageIds) !== current.message_ids) throw new ReviewError('Message snapshot changed; assess again', 409);
       if ((row.lane === 'show_me' || d.chip === 'show_before_clearing') && (d.disposition === 'trash' || d.finalDisposition === 'trash') && !d.acknowledged) throw new ReviewError('Acknowledge before clearing', 400);
-      if (d.kind === 'approve' && (row.status !== 'ready' || d.disposition !== row.proposed_action)) throw new ReviewError('Approve must match a ready proposal');
+      // Show-before-clearing proposes leaving the mail until seen, then its final
+      // handling; carrying out that final handling is agreement, not a correction.
+      const proposed = [row.proposed_action, ...(row.lane === 'show_me' ? [row.final_action] : [])];
+      if (d.kind === 'approve' && (row.status !== 'ready' || !proposed.includes(d.disposition))) throw new ReviewError('Approve must match a ready proposal');
       if (d.kind === 'skip' && d.disposition !== 'leave') throw new ReviewError('Skip leaves mail untouched');
       return { d, row };
     });
