@@ -59,6 +59,39 @@ export interface Assessment {
   gap: ChoiceAnswer<Gap>;
 }
 
+export type Lane = 'needs_action' | 'worth_reading' | 'show_me' | 'decision' | 'cleanup';
+
+/** One assessed thread as the review API returns it, joined with any submitted review. */
+export interface ReviewItem {
+  id: string;
+  thread_id: string;
+  assessment_source?: string | null;
+  deterministic_rule?: string | null;
+  deterministic_version?: number | null;
+  representation: Representation;
+  answers: Assessment | null;
+  proposed_action: Handling;
+  final_action: Handling;
+  lane: Lane;
+  reason: string;
+  priority: number;
+  status: 'ready' | 'unresolved';
+  error: string | null;
+  created_at: number;
+  model?: string;
+  actual_model?: string | null;
+  policy_id?: string;
+  rubric_version?: number;
+  review_kind: ReviewKind | null;
+  review_disposition: Handling | null;
+  review_final_disposition?: Handling | null;
+  review_chip?: string | null;
+  review_action_id: string | null;
+  execution_status: string | null;
+  action_status: string | null;
+  review_error: string | null;
+}
+
 export interface ReviewDecision {
   assessmentId: string;
   disposition: Handling;
