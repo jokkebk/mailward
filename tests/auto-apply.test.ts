@@ -173,7 +173,7 @@ describe('auto-apply', () => {
 
 		const outcome = await undoAction(ACCOUNT, row!.id);
 		expect(outcome.status).toBe('applied');
-		expect(gmailCalls).toEqual(['untrash:t2', 'labels:t2:INBOX,UNREAD:']);
+		expect(gmailCalls).toEqual(['untrash:t2', 'labels:t2:INBOX:']);
 
 		// The thread is back in the unread pool, and the rule still matches it — but the
 		// run must not silently re-trash what the human just rescued.

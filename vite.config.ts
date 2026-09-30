@@ -7,6 +7,6 @@ export default defineConfig({
 		__APP_VERSION__: JSON.stringify(pkg.version),
 		__BUILD_ID__: JSON.stringify(new Date().toISOString().slice(0, 16).replace('T', ' '))
 	},
-	server: { port: 4873, open: true },
+	server: { port: 4873, strictPort: true, open: true },
 	plugins: [sveltekit()]
 });

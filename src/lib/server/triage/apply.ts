@@ -226,12 +226,11 @@ export async function undoAction(accountId: string, actionId: string): Promise<A
 			case 'trash': {
 				await untrashThread(accountId, action.threadId);
 				// Gmail untrash removes TRASH but does not put the thread back in INBOX.
-				// Restore the original inbox/unread state recorded before trashing.
-				const add = [
-					...(prior.labelIds.includes('INBOX') ? ['INBOX'] : []),
-					...(prior.isUnread ? ['UNREAD'] : [])
-				];
-				if (add.length) await modifyThreadLabels(accountId, action.threadId, add, []);
+				// Trashing preserves each message's read state; avoid marking the whole
+				// conversation unread when only some messages were unread before.
+				if (prior.labelIds.includes('INBOX')) {
+					await modifyThreadLabels(accountId, action.threadId, ['INBOX'], []);
+				}
 				break;
 			}
 			case 'label_todo': {
