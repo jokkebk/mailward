@@ -53,6 +53,10 @@ describe('v3 content and handling', () => {
     expect(resolveHandling(parseAssessment(answers, 0), rep).lane).toBe('worth_reading');
     expect(resolveHandling(parseAssessment(answers, 1), rep).lane).toBe('needs_action');
     expect(resolveHandling(parseAssessment(answers, 0), rep).finalAction).toBe('trash');
+    answers.t0_attention = choice('none', ['act','read','glance','none','unclear']);
+    const clipped = structuredClone(rep);
+    clipped.messages[0].clipped = true;
+    expect(resolveHandling(parseAssessment(answers, 0), clipped).status).toBe('unresolved');
     answers.t0_attention = choice('unclear', ['act','read','glance','none','unclear']);
     expect(resolveHandling(parseAssessment(answers, 0), rep).status).toBe('unresolved');
     delete answers.t0_retention;

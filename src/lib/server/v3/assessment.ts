@@ -68,6 +68,7 @@ export function resolveHandling(assessment: Assessment | null, rep: Representati
   if (gap.choice !== 'sufficient') return unresolved(`Needs ${gap.choice.replace('_', ' ')}`);
   if (attention.choice === 'unclear' || retention.choice === 'unclear') return unresolved('Handling evidence unclear');
   if (attention.confidence < .35 || retention.confidence < .35) return unresolved('Handling evidence conflicted');
+  if (attention.choice === 'none' && retention.choice === 'disposable' && rep.messages.some((m) => m.attachmentsNotRead || m.clipped)) return unresolved('Destructive handling needs content inspection');
   const base = { finalAction: retention.choice === 'keep' ? 'archive' as const : 'trash' as const, priority: Math.round((urgency.score * 30 + relevance.score * 13) * 100) / 100, status: 'ready' as const };
   if (attention.choice === 'act') return { ...base, action: 'label_todo', lane: 'needs_action', reason: `${category.choice} · action needed`, priority: base.priority + 100 };
   if (attention.choice === 'read') return { ...base, action: 'label_todo', lane: 'worth_reading', reason: `${category.choice} · worth reading`, priority: base.priority + 60 };
