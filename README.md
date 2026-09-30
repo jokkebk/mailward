@@ -1,8 +1,8 @@
 # Mailward
 
-An email triage agent for unread Gmail. V3 assesses each thread once and offers
-Action board, Briefing, and Exceptions views over the same review set. You decide
-what to do; Gmail changes are logged and reversible.
+An email triage agent for unread Gmail. V3 assesses each thread once and lays
+the results out on one review page. You decide what to do; Gmail changes are
+logged and reversible.
 
 See [DESIGN.md](DESIGN.md) for the full design and roadmap.
 
@@ -19,12 +19,17 @@ shared once per batch. Up to four batches run concurrently. Missing or malformed
 evidence stays unresolved. Existing snapshots are reused when the message,
 policy, rubric, model, and relevant date context match.
 
-Switch among **Action board**, **Briefing**, and **Exceptions**. Needs action and
-Worth checking out stay separate in every view. Choose Trash, Archive, TODO,
-Leave untouched, or Done/handled per row. Done requires a final handling choice.
-Notes and feedback chips are optional. **Apply reviewed set** is the only Gmail
-mutation step; view changes and priority controls are display only. Show-before-
-clearing mail needs an explicit “I saw this” acknowledgement before trash.
+The review page lists **Needs action**, **Worth checking out**, **Needs a
+decision**, **Show before clearing**, **Archive** and **Trash**, then what was
+applied. Rows sort by urgency (relevance for worthwhile reading) and carry a 0–3
+importance signal; Archive and Trash are grouped by Jev's category. Each row's
+toggle shows TODO, Archive, Trash, Leave and Done at once: a ring marks Jev's
+proposal, a dashed ring its unconfirmed leaning on undecided rows, and a fill your
+choice. Section buttons accept every remaining proposal at once. Done asks what
+to do afterwards. Feedback chips and notes are optional. Keyboard: `j`/`k` move,
+`y` accepts the suggestion, `t` `e` `#` `l` `d` choose, `o` opens, `?` lists keys.
+**Apply** is the only Gmail mutation step; unapplied decisions survive a reload.
+Choosing Trash on a visible show-before-clearing row records that you saw it.
 Rows offer the exact representation Jev saw and an on-demand sanitized view of
 the full conversation. Individual applied actions can be undone. V3 imports no
 automation trust from legacy rules, and a new policy revision stays review-first.

@@ -819,6 +819,7 @@
 	}
 </script>
 
+<h1 style="font-size:1rem;margin:.5rem 0 .3rem">Mailward</h1>
 <div class="workspace-top">
 	<aside role="alert" style="padding:.8rem;margin-bottom:1rem;background:#fff3d7;border:1px solid #e8c767;border-radius:.5rem;line-height:1.45">
 		<strong>Previous rule view.</strong> Running triage here can immediately apply promoted rules to Gmail.

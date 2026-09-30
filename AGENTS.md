@@ -6,9 +6,10 @@ rules graduate to auto-apply. All actions logged + reversible. See DESIGN.md.
 
 - **V3 review**: `/` is the default review-first app; `/v3` redirects there.
   `/v2` is the legacy rule view and can auto-apply promoted rules during triage.
-  V3 assesses unread threads once with a compact policy and Jev; Review,
-  Briefing, and Needs a decision share a reviewed set. A narrow versioned calendar-response rule produces the same reviewable verdicts
-  without a Jev call; only rule verdicts show a source pill. Initial v3 never
+  V3 assesses unread threads once with a compact policy and Jev; one review
+  page shows every section (grouping/ordering in `src/lib/v3/review.ts`).
+  A narrow versioned calendar-response rule produces the same reviewable verdicts
+  without a Jev call; its rows form their own collapsed group. Initial v3 never
   auto-applies. `src/lib/server/v3/service.ts` is the service boundary.
 - **V3 tables**: `v3_policies`, `v3_assessments`, `v3_run_items`, `v3_reviews`,
   `v3_call_logs`; additive migrations `drizzle/0007_v3.sql` and `0008_v3_sources.sql`.
