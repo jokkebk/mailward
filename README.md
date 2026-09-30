@@ -6,6 +6,10 @@ Proven rules later graduate to auto-apply. Everything is logged and reversible.
 
 See [DESIGN.md](DESIGN.md) for the full design and roadmap.
 
+The [v3 architecture and implementation plan](V3.md) describes the upcoming
+assessment-based engine and three shared review views. Git tag `v2` preserves the
+current rule-centric baseline.
+
 ## Current workflow
 
 Mailward combines deterministic and AI rules, with a review step for proposals:
