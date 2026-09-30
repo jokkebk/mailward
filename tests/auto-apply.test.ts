@@ -28,8 +28,8 @@ mock.module('../src/lib/server/gmail/thread-actions', () => ({
 		gmailCalls.push(`todo:${t}`);
 		return 'Label_TODO';
 	},
-	async modifyThreadLabels(_a: string, t: string) {
-		gmailCalls.push(`labels:${t}`);
+	async modifyThreadLabels(_a: string, t: string, add: string[], remove: string[]) {
+		gmailCalls.push(`labels:${t}:${add.join(',')}:${remove.join(',')}`);
 	}
 }));
 
@@ -173,7 +173,7 @@ describe('auto-apply', () => {
 
 		const outcome = await undoAction(ACCOUNT, row!.id);
 		expect(outcome.status).toBe('applied');
-		expect(gmailCalls).toEqual(['untrash:t2']);
+		expect(gmailCalls).toEqual(['untrash:t2', 'labels:t2:INBOX,UNREAD:']);
 
 		// The thread is back in the unread pool, and the rule still matches it — but the
 		// run must not silently re-trash what the human just rescued.

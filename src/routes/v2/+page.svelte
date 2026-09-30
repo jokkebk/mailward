@@ -820,7 +820,10 @@
 </script>
 
 <div class="workspace-top">
-	<a href="/" style="display:inline-block;margin-bottom:.5rem;color:#2855aa;font-weight:600">Open inbox review →</a>
+	<aside role="alert" style="padding:.8rem;margin-bottom:1rem;background:#fff3d7;border:1px solid #e8c767;border-radius:.5rem;line-height:1.45">
+		<strong>Previous rule view.</strong> Running triage here can immediately apply promoted rules to Gmail.
+		<a href="/" style="color:#2855aa;font-weight:700">Use inbox review for review-first suggestions →</a>
+	</aside>
 <div class="bar">
 	{#if accounts.length}
 		<select onchange={(e) => selectAccount((e.target as HTMLSelectElement).value)} value={accountId}>

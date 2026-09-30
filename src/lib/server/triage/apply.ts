@@ -223,9 +223,17 @@ export async function undoAction(accountId: string, actionId: string): Promise<A
 				await modifyThreadLabels(accountId, action.threadId, add, []);
 				break;
 			}
-			case 'trash':
+			case 'trash': {
 				await untrashThread(accountId, action.threadId);
+				// Gmail untrash removes TRASH but does not put the thread back in INBOX.
+				// Restore the original inbox/unread state recorded before trashing.
+				const add = [
+					...(prior.labelIds.includes('INBOX') ? ['INBOX'] : []),
+					...(prior.isUnread ? ['UNREAD'] : [])
+				];
+				if (add.length) await modifyThreadLabels(accountId, action.threadId, add, []);
 				break;
+			}
 			case 'label_todo': {
 				const remove = prior.addedLabelId ? [prior.addedLabelId] : [];
 				if (remove.length) await modifyThreadLabels(accountId, action.threadId, [], remove);

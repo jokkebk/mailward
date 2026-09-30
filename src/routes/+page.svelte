@@ -121,7 +121,7 @@
 <svelte:head><title>Inbox review · Mailward</title></svelte:head>
 <main>
   <div class="intro">
-    <div><p class="eyebrow">YOUR MAILBOX</p><h2>Inbox review</h2><p>See what needs you, what is worth reading, and what can be cleared.</p></div>
+    <div><p class="eyebrow">MAILWARD 3 · REVIEW FIRST</p><h2>Inbox review</h2><p>See what needs you, what is worth reading, and what can be cleared. Checking mail does not move it.</p></div>
     <a class="legacy" href="/v2">Previous rule view</a>
   </div>
   <div class="toolbar accountbar">
