@@ -50,6 +50,13 @@
       "when": 1790300000000,
       "tag": "0006_ai_classification_model_cache",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1790750000000,
+      "tag": "0007_v3",
+      "breakpoints": true
     }
   ]
 }

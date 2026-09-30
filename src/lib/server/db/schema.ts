@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, index, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, text, integer, real, index, uniqueIndex, primaryKey } from 'drizzle-orm/sqlite-core';
 
 /**
  * Mailward schema.
@@ -320,3 +320,72 @@ export const ruleDispositions = sqliteTable('rule_dispositions', {
 }, (t) => ({
 	ruleActionIdx: index('idx_rule_dispositions_rule_action').on(t.ruleId, t.action)
 }));
+
+/** V3 uses a compact policy and assessment snapshots without inventing rules. */
+export const v3Policies = sqliteTable('v3_policies', {
+  id: text('id').primaryKey(),
+  accountId: text('account_id').notNull().references(() => tokens.id),
+  versionNo: integer('version_no').notNull(),
+  text: text('text').notNull(),
+  rubricVersion: integer('rubric_version').notNull().default(1),
+  status: text('status').notNull().default('proposed'),
+  importReport: text('import_report'),
+  createdBy: text('created_by').notNull().default('human'),
+  createdAt: integer('created_at').notNull()
+}, (t) => ({ accountVersion: uniqueIndex('idx_v3_policy_account_version').on(t.accountId, t.versionNo) }));
+
+export const v3Assessments = sqliteTable('v3_assessments', {
+  id: text('id').primaryKey(),
+  accountId: text('account_id').notNull().references(() => tokens.id),
+  threadId: text('thread_id').notNull(),
+  inputKey: text('input_key').notNull(),
+  policyId: text('policy_id').notNull().references(() => v3Policies.id),
+  rubricVersion: integer('rubric_version').notNull(),
+  model: text('model').notNull(),
+  actualModel: text('actual_model'),
+  representation: text('representation').notNull(),
+  answers: text('answers'),
+  proposedAction: text('proposed_action').notNull(),
+  finalAction: text('final_action').notNull(),
+  lane: text('lane').notNull(),
+  reason: text('reason').notNull(),
+  priority: real('priority').notNull().default(0),
+  status: text('status').notNull(),
+  error: text('error'),
+  createdAt: integer('created_at').notNull()
+}, (t) => ({ cache: index('idx_v3_assessment_cache').on(t.accountId, t.threadId, t.inputKey, t.policyId, t.rubricVersion, t.model) }));
+
+export const v3RunItems = sqliteTable('v3_run_items', {
+  runId: text('run_id').notNull().references(() => runs.id),
+  assessmentId: text('assessment_id').notNull().references(() => v3Assessments.id)
+}, (t) => ({ pk: primaryKey({ columns: [t.runId, t.assessmentId] }) }));
+
+export const v3Reviews = sqliteTable('v3_reviews', {
+  id: text('id').primaryKey(),
+  accountId: text('account_id').notNull().references(() => tokens.id),
+  assessmentId: text('assessment_id').notNull().unique().references(() => v3Assessments.id),
+  runId: text('run_id').notNull().references(() => runs.id),
+  actor: text('actor').notNull(),
+  kind: text('kind').notNull(),
+  disposition: text('disposition').notNull(),
+  finalDisposition: text('final_disposition'),
+  acknowledged: integer('acknowledged').notNull().default(0),
+  chip: text('chip'), note: text('note'),
+  actionId: text('action_id').references(() => actions.id),
+  executionStatus: text('execution_status').notNull(),
+  error: text('error'),
+  createdAt: integer('created_at').notNull()
+}, (t) => ({ runIdx: index('idx_v3_reviews_run').on(t.runId) }));
+
+export const v3CallLogs = sqliteTable('v3_call_logs', {
+  id: text('id').primaryKey(),
+  runId: text('run_id').notNull().references(() => runs.id),
+  accountId: text('account_id').notNull().references(() => tokens.id),
+  model: text('model').notNull(),
+  threadCount: integer('thread_count').notNull(),
+  promptChars: integer('prompt_chars').notNull(),
+  inputTokens: integer('input_tokens'), outputTokens: integer('output_tokens'),
+  durationMs: integer('duration_ms').notNull(),
+  status: text('status').notNull(), error: text('error'),
+  createdAt: integer('created_at').notNull()
+});

@@ -109,7 +109,7 @@ export async function applyThreadAction(opts: ApplyOpts): Promise<ApplyOutcome> 
 		// Re-throw reauth so the route can surface a 401; isolate other failures.
 		if ((error as { code?: string })?.code === 'reauth_required') throw error;
 		const msg = error instanceof Error ? error.message : String(error);
-		await db.insert(actions).values({
+		const failed = await db.insert(actions).values({
 			runId: opts.runId,
 			accountId: opts.accountId,
 			ruleId: opts.ruleId,
@@ -125,8 +125,8 @@ export async function applyThreadAction(opts: ApplyOpts): Promise<ApplyOutcome> 
 			verdict: opts.verdict,
 			error: msg,
 			createdAt: new Date()
-		});
-		return { threadId: opts.threadId, status: 'failed', error: msg };
+		}).returning({ id: actions.id }).get();
+		return { threadId: opts.threadId, status: 'failed', actionId: failed.id, error: msg };
 	}
 }
 

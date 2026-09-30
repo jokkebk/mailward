@@ -1,5 +1,5 @@
 import { getGmailClient } from './client';
-import sanitize from 'sanitize-html';
+export { sanitizeHtml } from './sanitize';
 
 export interface EmailContent {
 	html: string | null;
@@ -17,7 +17,7 @@ export async function fetchEmailContent(accountId: string, messageId: string): P
 	return extractBody(response.data.payload);
 }
 
-function extractBody(payload: any): EmailContent {
+export function extractBody(payload: any): EmailContent {
 	let html: string | null = null;
 	let text: string | null = null;
 
@@ -40,24 +40,4 @@ function extractBody(payload: any): EmailContent {
 function decodeBase64Url(data: string): string {
 	const base64 = data.replace(/-/g, '+').replace(/_/g, '/');
 	return Buffer.from(base64, 'base64').toString('utf-8');
-}
-
-export function sanitizeHtml(html: string): string {
-	return sanitize(html, {
-		allowedTags: sanitize.defaults.allowedTags.concat(['img', 'span', 'div', 'table', 'thead', 'tbody', 'tr', 'td', 'th', 'center', 'font']),
-		allowedAttributes: {
-			...sanitize.defaults.allowedAttributes,
-			'*': ['style', 'class', 'id', 'width', 'height', 'align', 'valign', 'bgcolor', 'color'],
-			'img': ['src', 'alt', 'width', 'height', 'style'],
-			'a': ['href', 'target', 'rel', 'style'],
-			'td': ['colspan', 'rowspan', 'width', 'height', 'style', 'align', 'valign', 'bgcolor'],
-			'th': ['colspan', 'rowspan', 'width', 'height', 'style', 'align', 'valign'],
-			'table': ['width', 'cellpadding', 'cellspacing', 'border', 'style', 'align', 'bgcolor'],
-			'font': ['color', 'size', 'face']
-		},
-		allowedSchemes: ['http', 'https', 'mailto', 'data'],
-		transformTags: {
-			'a': sanitize.simpleTransform('a', { target: '_blank', rel: 'noopener noreferrer' })
-		}
-	});
 }
