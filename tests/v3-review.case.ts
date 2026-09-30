@@ -65,7 +65,7 @@ describe('v3 reviewed set', () => {
         t0_gap: options(['sufficient','more_body','conversation','attachment','user_context'],'sufficient')
       };
       return new Response(JSON.stringify({ model:'jev-fixture', answers, usage:{ input_tokens:100, output_tokens:10 } }), { status: 200 });
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
     try {
       async function run() {
         const id = await startAssessment('a', 10);
