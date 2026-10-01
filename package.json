@@ -10,7 +10,8 @@
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
 		"test": "bun test",
 		"v3-report": "bun run scripts/v3-report.ts",
-		"v3-policy": "bun run scripts/v3-policy.ts"
+		"v3-policy": "bun run scripts/v3-policy.ts",
+		"v3-recipe": "bun run scripts/v3-recipe.ts"
 	},
 	"devDependencies": {
 		"@sveltejs/kit": "^2.0.0",

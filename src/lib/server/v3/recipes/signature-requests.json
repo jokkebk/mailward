@@ -1,0 +1,14 @@
+{
+  "key": "signature-requests",
+  "title": "Signature requests",
+  "description": "DocuSign and Dropbox Sign documents waiting for your signature. Kept as a record once signed.",
+  "action": "label_todo",
+  "section": "needs_action",
+  "then": "archive",
+  "reason": "Signature requested",
+  "match": [
+    { "field": "fromDomain", "matches": "(^|\\.)(docusign\\.net|hellosign\\.com|dropboxsign\\.com)$" },
+    { "field": "subject", "matches": "please (docusign|sign|review and sign)|signature request|waiting for your signature|needs your signature|requested your signature" },
+    { "not": { "field": "subject", "matches": "^(completed|signed|voided|declined)\\b" } }
+  ]
+}

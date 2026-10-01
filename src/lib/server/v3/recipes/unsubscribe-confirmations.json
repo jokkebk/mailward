@@ -1,0 +1,11 @@
+{
+  "key": "unsubscribe-confirmations",
+  "title": "Unsubscribe confirmations",
+  "description": "\"You have been unsubscribed\" receipts from mailing lists.",
+  "action": "trash",
+  "reason": "Unsubscribe confirmation",
+  "match": [
+    { "field": "subject", "matches": "\\b(you('| ha)ve been unsubscribed|you are now unsubscribed|successfully unsubscribed|unsubscribe(d)? (confirmation|successful))\\b" },
+    { "field": "body", "shorterThan": 3000 }
+  ]
+}

@@ -5,7 +5,7 @@ import { migrate } from 'drizzle-orm/bun-sqlite/migrator';
 import { prepareMessage, prepareThread, representationHasGap, calendarEndTime } from '../src/lib/server/v3/representation';
 import { buildAssessmentRequest, parseAssessment, resolveHandling } from '../src/lib/server/v3/assessment';
 import { getOrCreatePolicy, createPolicyRevision, STARTER_POLICY } from '../src/lib/server/v3/policy';
-import { deterministicHandling } from '../src/lib/server/v3/deterministic';
+import { recipeHandling, recipeMatches, RECIPE_LIBRARY } from '../src/lib/server/v3/recipes';
 import { sanitizeHtml } from '../src/lib/server/gmail/sanitize';
 
 const b64 = (s: string) => Buffer.from(s).toString('base64url');
@@ -112,7 +112,9 @@ describe('v3 content and handling', () => {
     rep.messages[0].attachmentsNotRead=true;
     expect(resolveHandling(a,rep).status).toBe('unresolved');
   });
-  test('deterministic replies exclude notes, documents, missing and mixed messages', () => {
+  test('the calendar recipe excludes notes, documents, missing and mixed messages', () => {
+    const calendar = RECIPE_LIBRARY.find((r) => r.spec.key === 'calendar-rsvp')!.spec;
+    const deterministicHandling = (rep: any) => (recipeMatches(calendar, rep) ? recipeHandling(calendar) : null);
     const mail = message('m', 'Alex has replied "Maybe" to this invitation.\n\nPlanning meeting\nGenerated description');
     mail.payload.headers.find((h) => h.name === 'Subject')!.value = 'Tentatively Accepted: Planning meeting @ Every week';
     mail.payload.parts.push({mimeType:'text/calendar',filename:'invite.ics',body:{attachmentId:'ics'}} as any);

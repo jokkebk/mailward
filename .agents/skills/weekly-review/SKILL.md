@@ -44,8 +44,8 @@ just to produce the weekly review.
 - Done records completed attention; Skip/Leave may mean deferred review. Neither
   is an automatic classifier correction. Failures are execution evidence. Undos
   merit inspection rather than an assumed wrong label.
-- Keep deterministic calendar verdicts separate from Jev. Their errors call for
-  rule/representation changes, not unrelated policy prose.
+- Keep recipe (rule) verdicts separate from Jev. Their errors call for a recipe
+  edit or a representation change, not unrelated policy prose.
 - Inspect representative mismatches and some agreements with --case. Separate
   ownership/preferences, changed circumstances, missing or clipped evidence,
   rubric misunderstanding and resolver behavior. Action agreement alone cannot
@@ -70,7 +70,7 @@ Create a private, ignored proposal file under data/:
 {
   "accountId": "the selected account",
   "expectedPolicyId": "currentPolicy.id from the packet",
-  "text": "the full replacement policy",
+  "cards": [{ "id": "existing-or-new-id", "title": "for people only", "body": "what Jev reads", "enabled": true }],
   "note": "evidence, rationale and validation limitations"
 }
 ```
@@ -79,13 +79,23 @@ Create a private, ignored proposal file under data/:
 bun run v3-policy data/weekly-review-proposal.json
 ```
 
-Dry-run prints full before/after text and writes nothing. Check supporting cases
+Prefer `cards`: keep existing card IDs and titles, and edit or add the bodies the
+evidence supports; only enabled bodies reach Jev. A full `"text"` replacement is
+still accepted but discards card titles. Dry-run prints full before/after text
+and writes nothing. Check supporting cases
 and a separate held-out set not used to write the revision. Prefer historical
 exact representations and review decisions. Manual analysis does not prove what
 Jev will answer under a new policy; state whether validation was manual or
 model-based and do not claim unrun results. Additional Jev evaluation sends private
 evidence and uses API quota: run it only within the user's authorized evaluation
 scope. Do not publish a replay as a new inbox run merely to validate a prompt.
+
+When one kind of mail is consistently handled the same way and its metadata
+identifies it reliably, a recipe may fit better than prose. Write the JSON (see
+`src/lib/server/v3/recipes/*.json` and `RECIPE_FIELDS` in `recipes.ts`) and dry-run
+it with `bun run v3-recipe <accountId> recipe.json`: it reports matches in stored
+mail, review agreement and overlaps. `--apply` adopts it after approval, like a
+policy revision.
 
 If the cause is a rubric, representation or resolver bug, propose a targeted code
 change instead. Rubric edits live in assessment.ts and need a RUBRIC_VERSION bump;

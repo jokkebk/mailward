@@ -68,6 +68,9 @@ export interface ReviewItem {
   assessment_source?: string | null;
   deterministic_rule?: string | null;
   deterministic_version?: number | null;
+  /** Title and description of the recipe version that matched, for rule rows. */
+  rule_title?: string | null;
+  rule_description?: string | null;
   representation: Representation;
   answers: Assessment | null;
   proposed_action: Handling;
@@ -100,4 +103,37 @@ export interface ReviewDecision {
   acknowledged?: boolean;
   chip?: 'already_handled' | 'other_owner' | 'worth_reading' | 'actual_receipt' | 'show_before_clearing';
   note?: string;
+}
+
+/** One editable piece of the policy. Only enabled bodies reach Jev; titles are for people. */
+export interface PolicyCard {
+  id: string;
+  title: string;
+  body: string;
+  enabled: boolean;
+}
+
+/** A field test, or a combination of tests. Text comparisons ignore case. */
+export type RecipeCondition =
+  | { field: string; equals?: string | number | boolean; matches?: string; contains?: string; in?: (string | number)[]; is?: boolean | null; shorterThan?: number; longerThan?: number }
+  | { any: RecipeCondition[] }
+  | { all: RecipeCondition[] }
+  | { not: RecipeCondition };
+
+/** A recipe is data, not code: metadata conditions plus the handling to propose. */
+export interface RecipeSpec {
+  key: string;
+  title: string;
+  description?: string;
+  action: 'trash' | 'archive' | 'label_todo';
+  /** TODO: needs_action (default) or worth_reading. Trash/Archive: show_before_clearing. */
+  section?: 'needs_action' | 'worth_reading' | 'show_before_clearing';
+  /** Handling after a TODO is done; defaults to archive. */
+  then?: 'trash' | 'archive' | 'leave';
+  reason?: string;
+  /** "every" unread message must match (default), or "any" of them. */
+  messages?: 'every' | 'any';
+  /** Skip threads with missing, omitted or unavailable content (default true). */
+  completeContentOnly?: boolean;
+  match: RecipeCondition[];
 }

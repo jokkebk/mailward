@@ -1,0 +1,11 @@
+{
+  "key": "sign-in-codes",
+  "title": "Sign-in and verification codes",
+  "description": "Short one-time code emails. They expire long before you triage.",
+  "action": "trash",
+  "reason": "One-time code",
+  "match": [
+    { "field": "subject", "matches": "\\b(verification|security|sign[- ]?in|login|one[- ]time|confirmation|access) code\\b|\\bpasscode\\b|\\bOTP\\b" },
+    { "field": "body", "shorterThan": 1500 }
+  ]
+}

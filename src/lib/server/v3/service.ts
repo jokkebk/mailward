@@ -7,8 +7,10 @@ import { handleReauthCleanup } from '../gmail/reauth';
 import { extractBody } from '../gmail/content';
 import { sanitizeHtml } from '../gmail/sanitize';
 import { applyThreadAction, undoAction } from '../gmail/execution';
-import { deterministicHandling, saveDeterministicAssessment, CALENDAR_RESPONSE_RULE } from './deterministic';
-import { getOrCreatePolicy } from './policy';
+import { saveRuleAssessment } from './deterministic';
+import { getOrCreatePolicy, getPolicy } from './policy';
+import { firstMatch, listRecipes } from './recipes';
+import { ensureAccountSetup } from './settings';
 import { callJev, resolveHandling, RUBRIC_VERSION, V3_MODEL } from './assessment';
 import { prepareThread, REPRESENTATION_VERSION } from './representation';
 import type { Assessment, Representation, ReviewDecision } from '$lib/types/v3';
@@ -41,11 +43,11 @@ export function listRun(accountId: string, runId?: string) {
   try {
     const account = sqlite.query('SELECT id FROM tokens WHERE id = ?').get(accountId);
     if (!account) throw new ReviewError('Account not connected', 404);
-    const policy = getOrCreatePolicy(sqlite, accountId);
+    const policy = getPolicy(sqlite, accountId);
     const run = (runId
       ? sqlite.query("SELECT * FROM runs WHERE id = ? AND account_id = ? AND scope = 'v3'").get(runId, accountId)
       : sqlite.query("SELECT * FROM runs WHERE account_id = ? AND scope = 'v3' ORDER BY started_at DESC LIMIT 1").get(accountId)) as any;
-    if (!run) return { run: null, policy, items: [], calls: [], steps: [] };
+    if (!run) return { run: null, policy, setupNeeded: !policy, items: [], calls: [], steps: [] };
     const items = sqlite.query(`SELECT a.*, r.kind AS review_kind, r.disposition AS review_disposition, r.action_id AS review_action_id,
       r.execution_status, r.error AS review_error, r.final_disposition AS review_final_disposition, r.chip AS review_chip,
       x.status AS action_status FROM v3_run_items i JOIN v3_assessments a ON i.assessment_id = a.id
@@ -57,7 +59,12 @@ export function listRun(accountId: string, runId?: string) {
     const replaySource = replayStep ? sqlite.query('SELECT started_at FROM runs WHERE id=?').get(replayStep.stage.slice('v3_replay:'.length)) as any : null;
     const assessedPolicy = items[0] ? sqlite.query('SELECT * FROM v3_policies WHERE id=?').get(items[0].policy_id) : null;
     const replay = replaySource ? { sourceRunId: replayStep.stage.slice('v3_replay:'.length), assessedAt: replaySource.started_at } : null;
-    return { run, policy: assessedPolicy ?? policy, deterministicRules: [CALENDAR_RESPONSE_RULE], replay, items: items.map((a) => ({ ...a, representation: parse<Representation>(a.representation), answers: a.answers ? parse<Assessment>(a.answers) : null })), calls, steps };
+    // Rule rows show the title of the recipe version that matched, even after edits.
+    const recipes = new Map((sqlite.query('SELECT key, version, spec FROM v3_recipes WHERE account_id = ?').all(accountId) as { key: string; version: number; spec: string }[])
+      .map((r) => { const spec = parse<{ title: string; description?: string }>(r.spec); return [`${r.key}@${r.version}`, { title: spec.title, description: spec.description ?? null }]; }));
+    return { run, policy: assessedPolicy ?? policy, setupNeeded: !policy, replay, calls, steps,
+      items: items.map((a) => ({ ...a, representation: parse<Representation>(a.representation), answers: a.answers ? parse<Assessment>(a.answers) : null,
+        ...(a.assessment_source === 'rule' ? { rule_title: recipes.get(`${a.deterministic_rule}@${a.deterministic_version}`)?.title ?? null, rule_description: recipes.get(`${a.deterministic_rule}@${a.deterministic_version}`)?.description ?? null } : {}) })) };
   } finally { sqlite.close(); }
 }
 
@@ -91,7 +98,7 @@ export async function startAssessment(accountId: string, limit = 100): Promise<s
   const sqlite = openV3Database();
   const account = sqlite.query('SELECT id FROM tokens WHERE id = ?').get(accountId);
   if (!account) { sqlite.close(); throw new Error('Account not connected'); }
-  getOrCreatePolicy(sqlite, accountId);
+  ensureAccountSetup(sqlite, accountId);
   const id = crypto.randomUUID();
   sqlite.query('INSERT INTO runs (id, account_id, started_at, scope, status) VALUES (?, ?, ?, ?, ?)').run(id, accountId, Date.now(), 'v3', 'running');
   sqlite.close();
@@ -117,6 +124,7 @@ async function assessAccount(accountId: string, runId: string, limit: number) {
   try {
     const fetchStarted = Date.now();
     const policy = getOrCreatePolicy(sqlite, accountId);
+    const recipes = listRecipes(sqlite, accountId, true);
     const gmail = await getGmailClient(accountId);
     const listed: { id?: string | null; threadId?: string | null }[] = [];
     let pageToken: string | undefined;
@@ -141,8 +149,9 @@ async function assessAccount(accountId: string, runId: string, limit: number) {
       }
       upsertThread(sqlite, accountId, rep);
       const key = hash({ rep, contextDate: cacheContext(rep) });
-      if (deterministicHandling(rep)) {
-        saveDeterministicAssessment(sqlite, accountId, runId, policy.id, RUBRIC_VERSION, rep, key);
+      const recipe = firstMatch(recipes, rep);
+      if (recipe) {
+        saveRuleAssessment(sqlite, accountId, runId, policy.id, RUBRIC_VERSION, rep, key, recipe);
         return;
       }
       const cached = sqlite.query('SELECT id FROM v3_assessments WHERE account_id = ? AND thread_id = ? AND input_key = ? AND policy_id = ? AND rubric_version = ? AND model = ? AND answers IS NOT NULL AND error IS NULL ORDER BY created_at DESC LIMIT 1').get(accountId, threadId, key, policy.id, RUBRIC_VERSION, V3_MODEL) as { id: string } | null;

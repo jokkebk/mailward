@@ -1,0 +1,11 @@
+{
+  "key": "calendar-reminders",
+  "title": "Calendar reminders",
+  "description": "Google Calendar's automatic \"Notification: …\" reminders. The event is in your calendar anyway.",
+  "action": "trash",
+  "reason": "Calendar reminder",
+  "match": [
+    { "field": "fromAddress", "equals": "calendar-notification@google.com" },
+    { "field": "subject", "matches": "^Notification: " }
+  ]
+}

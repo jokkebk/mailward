@@ -64,6 +64,13 @@
       "when": 1790799000000,
       "tag": "0008_v3_sources",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1791000000000,
+      "tag": "0009_v3_settings",
+      "breakpoints": true
     }
   ]
 }

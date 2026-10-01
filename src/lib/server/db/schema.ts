@@ -321,9 +321,26 @@ export const v3Policies = sqliteTable('v3_policies', {
   rubricVersion: integer('rubric_version').notNull().default(1),
   status: text('status').notNull().default('proposed'),
   importReport: text('import_report'),
+  /** Guidance cards as JSON; `text` is their enabled bodies joined. Null for text-only revisions. */
+  sections: text('sections'),
   createdBy: text('created_by').notNull().default('human'),
   createdAt: integer('created_at').notNull()
 }, (t) => ({ accountVersion: uniqueIndex('idx_v3_policy_account_version').on(t.accountId, t.versionNo) }));
+
+/** Adopted recipes: JSON metadata filters that propose handling without Jev. Edits append a version. */
+export const v3Recipes = sqliteTable('v3_recipes', {
+  id: text('id').primaryKey(),
+  accountId: text('account_id').notNull().references(() => tokens.id),
+  key: text('key').notNull(),
+  version: integer('version').notNull(),
+  spec: text('spec').notNull(),
+  status: text('status').notNull().default('active'), // 'active' | 'paused' | 'retired'
+  position: integer('position').notNull().default(0),
+  source: text('source'),
+  createdBy: text('created_by').notNull(),
+  createdAt: integer('created_at').notNull(),
+  updatedAt: integer('updated_at').notNull()
+}, (t) => ({ accountKeyVersion: uniqueIndex('idx_v3_recipes_account_key_version').on(t.accountId, t.key, t.version) }));
 
 export const v3Assessments = sqliteTable('v3_assessments', {
   assessmentSource: text('assessment_source').notNull().default('jev'),

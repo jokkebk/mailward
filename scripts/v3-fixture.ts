@@ -3,7 +3,10 @@ import { Database } from 'bun:sqlite';
 import { drizzle } from 'drizzle-orm/bun-sqlite';
 import { migrate } from 'drizzle-orm/bun-sqlite/migrator';
 import { prepareThread } from '../src/lib/server/v3/representation';
-import { resolveHandling, V3_MODEL } from '../src/lib/server/v3/assessment';
+import { resolveHandling, V3_MODEL, RUBRIC_VERSION } from '../src/lib/server/v3/assessment';
+import { ensureAccountSetup } from '../src/lib/server/v3/settings';
+import { adoptLibraryRecipe, firstMatch, listRecipes } from '../src/lib/server/v3/recipes';
+import { saveRuleAssessment } from '../src/lib/server/v3/deterministic';
 import type { Assessment, Attention, Retention } from '../src/lib/types/v3';
 
 const path = process.argv[2] || '/tmp/mailward-v3-fixture.db';
@@ -13,8 +16,11 @@ const account = 'fixture@example.test';
 sqlite.query('INSERT OR IGNORE INTO tokens (id,access_token,refresh_token,expires_at) VALUES (?,?,?,?)').run(account,'fixture','fixture',Date.now()+86400000);
 const runId = crypto.randomUUID();
 sqlite.query('INSERT INTO runs (id,account_id,started_at,ended_at,scope,status) VALUES (?,?,?,?,?,?)').run(runId,account,Date.now(),Date.now(),'v3','completed');
-const policyId = crypto.randomUUID();
-sqlite.query('INSERT INTO v3_policies (id,account_id,version_no,text,rubric_version,status,import_report,created_at) VALUES (?,?,?,?,?,?,?,?)').run(policyId,account,1,'Fixture policy',1,'proposed',JSON.stringify({ source: 'safe synthetic fixture', automationInherited: false }),Date.now());
+// The fixture account uses the starter guidance and recipes; a second account
+// has no policy yet, to preview the setup flow.
+const policyId = ensureAccountSetup(sqlite, account).id;
+if (!listRecipes(sqlite, account).some((r) => r.key === 'stripe-receipts')) adoptLibraryRecipe(sqlite, account, 'stripe-receipts', 'fixture');
+sqlite.query('INSERT OR IGNORE INTO tokens (id,access_token,refresh_token,expires_at) VALUES (?,?,?,?)').run('new@example.test','fixture','fixture',Date.now()+86400000);
 const answer = (choice: string) => ({ type: 'choice' as const, choice, confidence: .92, probabilities: { [choice]: 1 } });
 const score = (n: number) => ({ type: 'score' as const, score: n, confidence: .9, probabilities: { [String(n)]: 1 } });
 const examples: [string,string,string,Attention,Retention,number,number][] = [
@@ -41,6 +47,24 @@ for (const [subject, body, from, attention, retention, urgency, relevance] of ex
   sqlite.query(`INSERT INTO v3_assessments (id,account_id,thread_id,input_key,policy_id,rubric_version,model,actual_model,representation,answers,proposed_action,final_action,lane,reason,priority,status,created_at)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(aid,account,id,mid,policyId,1,V3_MODEL,V3_MODEL,JSON.stringify(rep),JSON.stringify(assessment),handling.action,handling.finalAction,handling.lane,handling.reason,handling.priority,handling.status,Date.now());
   sqlite.query('INSERT INTO v3_run_items VALUES (?,?)').run(runId,aid);
+}
+// Recipe matches skip Jev, as in a real run.
+const recipes = listRecipes(sqlite, account, true);
+const ruleMail: [string, string, string][] = [
+  ['Alex Doe <alex@sample.test>', 'Accepted: Planning @ Thu', 'Alex Doe has accepted this invitation.\n\nPlanning\n\nInvitation from Google Calendar'],
+  ['Acme <receipts+x@stripe.com>', 'Your receipt from Acme #2041-3317', 'Amount paid €24.00. Thanks for your business.']
+];
+for (const [from, subject, body] of ruleMail) {
+  const id = crypto.randomUUID(); const mid = crypto.randomUUID();
+  const message = { id: mid, labelIds: ['INBOX','UNREAD'], payload: { mimeType: 'multipart/mixed', headers: [
+    { name: 'From', value: from }, { name: 'To', value: account }, { name: 'Subject', value: subject }, { name: 'Date', value: new Date().toUTCString() }
+  ], parts: [{ mimeType: 'text/plain', body: { data: Buffer.from(body).toString('base64url') } }, ...(subject.startsWith('Accepted') ? [{ mimeType: 'text/calendar', filename: 'invite.ics', body: { attachmentId: 'ics' } }] : [])] } };
+  const rep = prepareThread(id,[mid],new Map([[mid,message]]));
+  const recipe = firstMatch(recipes, rep);
+  if (!recipe) { console.warn(`No recipe matched fixture “${subject}”`); continue; }
+  sqlite.query(`INSERT INTO threads (id,account_id,"from",from_domain,"to",subject,snippet,received_at,is_unread,label_ids,message_ids,synced_at)
+    VALUES (?,?,?,?,?,?,?,?,1,?,?,?)`).run(id,account,from,'sample.test',account,subject,body,Date.now(),JSON.stringify(['INBOX','UNREAD']),JSON.stringify([mid]),Date.now());
+  saveRuleAssessment(sqlite, account, runId, policyId, RUBRIC_VERSION, rep, mid, recipe);
 }
 sqlite.close();
 console.log(`Fixture ready at ${path}`);

@@ -1,0 +1,11 @@
+{
+  "key": "stripe-receipts",
+  "title": "Stripe receipts",
+  "description": "Payment receipts sent through Stripe, kept for your records without a TODO.",
+  "action": "archive",
+  "reason": "Receipt · keep for records",
+  "match": [
+    { "field": "fromDomain", "matches": "(^|\\.)stripe\\.com$" },
+    { "field": "subject", "matches": "^your receipt from " }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "key": "calendar-rsvp",
+  "title": "Calendar replies",
+  "description": "Accepted, declined or maybe replies with no note from the person.",
+  "action": "trash",
+  "reason": "Bare calendar response · no human note",
+  "match": [
+    { "field": "calendar.responseOnly", "is": true },
+    { "field": "calendar.note", "is": null },
+    { "field": "clipped", "is": false },
+    { "field": "attachmentsNotRead", "is": false }
+  ]
+}
