@@ -110,10 +110,11 @@ See [DESIGN.md](DESIGN.md) for the historical snapshot evaluation/replay tools.
 
 ## Layout
 
-- `src/lib/server/v3/` — policy, representation, assessment, deterministic calendar rule, review service
+- `src/lib/server/v3/` — policy (guidance cards), representation, assessment, recipes, settings, review service
+- `src/lib/server/v3/recipes/` — the shipped recipe catalogue (JSON)
 - `src/lib/v3/review.ts` — review sections, grouping, ranking, decision helpers
-- `src/lib/components/` — review rows, action controls, icons
+- `src/lib/components/` — review rows, action controls, icons; `settings/` for the settings page
 - `src/lib/server/gmail/` — OAuth, reauth, thread operations, action ledger and undo, content sanitization
 - `src/lib/server/db/` — active and historical schema; migrations remain in `drizzle/`
-- `src/routes/api/v3/` — run, review, conversation content, undo
+- `src/routes/api/v3/` — run, review, conversation content, undo, settings
 - `scripts/v3-*.ts` — fixtures, reports, private snapshot evaluation and replay

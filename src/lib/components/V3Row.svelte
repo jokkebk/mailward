@@ -4,7 +4,7 @@
   import Icon, { type IconName } from './v3/Icon.svelte';
   import {
     APPLIED_LABEL, ATTENTION_LABEL, CATEGORY_SINGULAR, choiceOf, formatWhen, parseSender, percent, receivedAt,
-    reasonSentence, rowTags, snippet, suggestionOf, tier, type Choice, type SectionKey
+    reasonSentence, rowTags, ruleIcon, snippet, suggestionOf, tier, type Choice, type SectionKey
   } from '$lib/v3/review';
 
   let { item, section, accountId, draft, focused = false, expanded = false, onToggle, onChoose, onPatch, onUndo, onFocus }: {
@@ -36,7 +36,7 @@
   const count = $derived(messages.length + item.representation.omittedUnread);
   const attachments = $derived(messages.flatMap((m) => m.attachments ?? []).filter((a) => !a.inline && !a.calendar));
   const isRule = $derived(item.assessment_source === 'rule');
-  const icon = $derived<IconName>(isRule ? 'calendar' : item.answers?.category.choice ?? 'other');
+  const icon = $derived<IconName>(isRule ? ruleIcon(item.deterministic_rule) : item.answers?.category.choice ?? 'other');
   const bars = $derived(section ? tier(item, section) : 0);
   const quiet = $derived((section === 'trash' || section === 'archive') && bars === 0);
   const tags = $derived(section ? rowTags(item, section) : []);
@@ -45,7 +45,7 @@
   const a = $derived(item.answers);
   const signalTitle = $derived(a
     ? `Urgency ${a.urgency.score.toFixed(1)} of 3 · Relevance ${a.relevance.score.toFixed(1)} of 3`
-    : isRule ? 'Matched a fixed rule; Jev was not asked' : 'Not assessed');
+    : isRule ? 'Matched a recipe; Jev was not asked' : 'Not assessed');
   const split = $derived(a
     ? (Object.entries(a.attention.probabilities) as [keyof typeof ATTENTION_LABEL, number][]).filter(([, p]) => p >= .05).sort((x, y) => y[1] - x[1])
     : []);
@@ -95,7 +95,7 @@
 >
   <div class="line">
     <span class="signal" data-tier={bars} title={signalTitle} aria-label={signalTitle}><i></i><i></i><i></i></span>
-    <span class="cat" title={isRule ? 'Calendar reply' : a ? CATEGORY_SINGULAR[a.category.choice] : 'Unknown kind'}><Icon name={icon} /></span>
+    <span class="cat" title={isRule ? item.rule_title ?? 'Recipe match' : a ? CATEGORY_SINGULAR[a.category.choice] : 'Unknown kind'}><Icon name={icon} /></span>
     <button class="who" onclick={toggleOpen} aria-expanded={expanded} title={first?.from}>
       <span class="name">{sender.name}</span>
       {#if sender.via}<span class="via">{sender.via}</span>{/if}
@@ -141,7 +141,7 @@
       </p>
 
       {#if isRule}
-        <p class="read">Matched the fixed rule <strong>{item.deterministic_rule}</strong> (v{item.deterministic_version}): a calendar reply with no note from the person. Jev was not asked.</p>
+        <p class="read">Matched the recipe <a href="/settings#recipes"><strong>{item.rule_title ?? item.deterministic_rule}</strong></a> (v{item.deterministic_version}){item.rule_description ? `: ${item.rule_description}` : '.'} Jev was not asked.</p>
       {:else if a}
         <dl class="read">
           <div><dt>Kind</dt><dd>{CATEGORY_SINGULAR[a.category.choice]}</dd></div>

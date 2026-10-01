@@ -56,7 +56,7 @@ describe('single review page model', () => {
     const trash = buildSections(items).sections.find((s) => s.def.key === 'trash')!;
     expect(trash.groups!.map((g) => [g.title, g.rows.length])).toEqual([['Notifications', 2], ['Sales & promotions', 2], ['Calendar replies', 1]]);
     expect(trash.groups![0].rows[0].answers!.urgency.score).toBe(1.2);
-    expect(trash.groups![2].hint).toContain('rule v1');
+    expect(trash.groups![2].hint).toContain('recipe v1');
   });
 
   test('obligations sort by urgency, worthwhile reading by relevance', () => {

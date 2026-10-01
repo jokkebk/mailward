@@ -43,6 +43,16 @@
 		color: var(--ink);
 		-webkit-font-smoothing: antialiased;
 	}
+	/* Shared controls; pages may refine them locally. */
+	:global(.btn) { display: inline-flex; align-items: center; gap: .4rem; white-space: nowrap; height: 30px; padding: 0 .8rem; border: 1px solid var(--line-strong); border-radius: 7px; background: var(--surface); color: var(--ink); font: inherit; font-size: 12.5px; font-weight: 600; text-decoration: none; cursor: pointer; }
+	:global(.btn:hover:not(:disabled)) { border-color: var(--ink-4); }
+	:global(.btn.primary) { border-color: var(--ink); background: var(--ink); color: #fff; }
+	:global(.btn.primary:hover:not(:disabled)) { background: #2a3445; }
+	:global(.btn:disabled) { opacity: .45; cursor: default; }
+	:global(.quiet) { height: 28px; padding: 0 .55rem; border: 0; border-radius: 6px; background: none; color: var(--ink-3); font: inherit; font-size: 12.5px; font-weight: 550; text-decoration: none; cursor: pointer; display: inline-flex; align-items: center; gap: .3rem; }
+	:global(.quiet:hover:not(:disabled)), :global(.quiet[aria-expanded='true']) { background: var(--sunken); color: var(--ink); }
+	:global(.quiet:disabled) { opacity: .45; cursor: default; }
+	:global(button:focus-visible), :global(a:focus-visible), :global(select:focus-visible) { outline: 2px solid var(--focus); outline-offset: 1px; }
 	.shell {
 		max-width: 1320px;
 		margin: 0 auto;

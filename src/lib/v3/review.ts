@@ -41,9 +41,11 @@ export const CATEGORY_SINGULAR: Record<Category, string> = {
 export const ATTENTION_LABEL: Record<Attention, string> = {
   act: 'Needs action', read: 'Worth reading', glance: 'Show before clearing', none: 'No attention', unclear: 'Unclear'
 };
+/** Fallbacks for rule rows stored before recipes carried their own title. */
 const RULE_GROUPS: Record<string, { title: string; hint: string }> = {
   'calendar-rsvp': { title: 'Calendar replies', hint: 'Bare accept/decline with no note' }
 };
+export const ruleIcon = (key: string | null | undefined) => (key?.startsWith('calendar') ? 'calendar' as const : 'zap' as const);
 
 export function sectionOf(item: ReviewItem): SectionKey {
   if (item.lane !== 'cleanup') return item.lane;
@@ -131,7 +133,7 @@ export interface Subgroup {
   key: string;
   title: string;
   hint: string | null;
-  icon: Category | 'calendar';
+  icon: Category | 'calendar' | 'zap';
   rule: boolean;
   rows: ReviewItem[];
 }
@@ -150,12 +152,12 @@ function subgroupsOf(rows: ReviewItem[], section: SectionKey): Subgroup[] {
     const category = row.answers?.category.choice ?? 'other';
     const key = ruleKey ? `rule:${ruleKey}` : category;
     if (!map.has(key)) {
-      const rule = ruleKey ? RULE_GROUPS[ruleKey] ?? { title: 'Rule matches', hint: null } : null;
+      const rule = ruleKey ? { title: row.rule_title ?? RULE_GROUPS[ruleKey]?.title ?? 'Recipe matches', hint: RULE_GROUPS[ruleKey]?.hint ?? null } : null;
       map.set(key, {
         key, rule: !!ruleKey, rows: [],
         title: rule?.title ?? CATEGORY_LABEL[category],
-        hint: rule ? `${rule.hint ?? ''}${rule.hint ? ' · ' : ''}rule v${row.deterministic_version ?? 1}` : null,
-        icon: ruleKey === 'calendar-rsvp' ? 'calendar' : category
+        hint: rule ? `${rule.hint ?? ''}${rule.hint ? ' · ' : ''}recipe v${row.deterministic_version ?? 1}` : null,
+        icon: ruleKey ? ruleIcon(ruleKey) : category
       });
     }
     map.get(key)!.rows.push(row);

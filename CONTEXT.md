@@ -5,7 +5,11 @@ for one thread representation under a specific policy, rubric, and model.
 Assessment is separate from a review decision and Gmail execution.
 
 **Policy**: Compact, versioned preferences supplied with each Jev request. A new
-revision stays review-first and inherits no automation trust.
+revision stays review-first and inherits no automation trust. In the UI the
+policy is called **guidance**.
+
+**Guidance card**: One titled, switchable part of the policy. Only enabled card
+bodies reach Jev; the title is for people.
 
 **Representation**: The bounded, deterministic record of unread content that
 Jev sees, including explicit omissions and unavailable evidence.
@@ -39,6 +43,8 @@ does not change Gmail; Apply submits the set for validation and execution.
 **Receipt**: A submitted review joined with its actual execution outcome.
 Applied actions link to the reversible action ledger; Leave has no action.
 
-**Deterministic rule**: A narrow, versioned calendar-response check that produces
-a reviewable assessment without a Jev call. It is distinct from the retired
-v2 rule engine.
+**Recipe**: A versioned JSON filter over message metadata that proposes Trash,
+Archive or TODO without a Jev call. Recipes are adopted, not enabled: the account
+holds its own copy. Matches are reviewable like any assessment. Stored rows call
+these rule assessments (`assessment_source = 'rule'`). Distinct from the retired
+v2 rule engine, which mixed AI and rule tiers with auto-apply.

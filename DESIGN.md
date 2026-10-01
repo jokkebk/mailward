@@ -18,10 +18,17 @@ clipping, omitted unread messages, unread attachments, and unavailable content.
 It does not fetch conversation history for assessment. Human inspection can load
 the full conversation on demand, with sanitized HTML in a sandboxed frame.
 
-A narrow, versioned deterministic rule handles bare calendar responses. Human
-notes, missing content, ordinary invitations, documents, and mixed-message
-threads fall through to Jev. Deterministic verdicts remain reviewable and form
-a collapsed group on the review page.
+Recipes run before Jev. A recipe is a JSON object of metadata conditions
+(sender, subject, body, labels, calendar facts, thread counts…) plus a handling
+target: Trash, Archive, or TODO, optionally via Show before clearing. One generic
+handler in `recipes.ts` evaluates them; the first active recipe in list order
+wins. By default every unread message must match and incomplete content falls
+through. Matches remain reviewable and form a collapsed group on the review page.
+The mechanism is deliberately flexible: what is safe enough to skip Jev is the
+author's call, and settings show what each recipe matched in recent stored mail,
+how those threads were reviewed, and where recipes overlap. The calendar-response
+recipe relies on the representation's `responseOnly` fact, so human notes, other
+messages and documents fall through to Jev.
 
 Jev answers six typed questions: category, attention, retention, urgency,
 relevance, and evidence gap. Each request assesses one thread with all six
@@ -65,6 +72,28 @@ an assessment by the model.
 There is no auto-apply or policy-promotion workflow. Existing automation trust is
 never inherited by a policy revision.
 
+## Settings
+
+`/settings` is where an account's configuration is visible and editable.
+`settings.ts` loads and changes it; nothing there calls Gmail or Jev.
+
+- **Guidance** is the policy, stored as ordered cards (`v3_policies.sections`).
+  Only enabled card bodies, joined by blank lines, reach Jev; titles never do.
+  A change to that text appends a version and the next run reassesses with it.
+  Title-only or switched-off-text edits update the current version in place.
+  Text-only revisions (imports, older agent edits) split into cards that
+  reproduce the exact text. Saves check the expected policy ID.
+- **Recipes** are adopted per account from the shipped catalogue or written as
+  JSON in the UI or by an agent (`v3-recipe`). Edits append a recipe version and
+  retire the previous one; assessments record the key and version that matched.
+  A dry run checks a recipe against the last 30 days of stored representations.
+- **History** lists policy versions with actor and note; restoring appends a copy.
+- **About Jev** shows the six questions as sent, read-only. They are program, not
+  configuration.
+- **Setup** composes the first policy from a name and role, the starter cards
+  and optional suggested cards, and adopts chosen recipes. A run started before
+  setup gets the starter guidance and recommended recipes.
+
 ## Gmail and persistence
 
 SQLite is the whole durable system state. `DATABASE_PATH` defaults to
@@ -73,7 +102,7 @@ sessions older than two hours are marked failed. Migration history is retained
 so both existing installations and empty fixture databases remain supported.
 
 Active records are `tokens`, `threads`, `runs`, `run_steps`, `actions`, plus
-`v3_policies`, `v3_assessments`, `v3_run_items`, `v3_reviews`, and `v3_call_logs`.
+`v3_policies`, `v3_recipes`, `v3_assessments`, `v3_run_items`, `v3_reviews`, and `v3_call_logs`.
 Assessment, review, and Gmail execution are separate records. Policies are
 versioned; reviews retain actor/provenance and link to action receipts.
 
@@ -86,8 +115,9 @@ message read states. OAuth refresh and reauthorization live in `gmail/`.
 V2's rule engine, UI, APIs, classifiers, and maintenance scripts are retired to
 Git history (the `v2` tag records the baseline). Legacy rule, proposal, verdict,
 classification, and telemetry tables remain for historical records and snapshot
-comparisons. Existing accounts reuse their stored v3 policy; new accounts receive
-a generic starter policy. The daily app never reads legacy rules or verdicts.
+comparisons. Existing accounts reuse their stored v3 policy; new accounts go through
+setup. Accounts that existed before recipes keep the calendar rule as an adopted
+recipe at the same key and version. The daily app never reads legacy rules or verdicts.
 Schema cleanup must not drop historical records or rewrite old migrations.
 
 ## Offline learning and tooling
@@ -105,7 +135,7 @@ checks the expected policy ID before applying an approved revision. No scheduled
 learner modifies production prompts.
 
 Evaluation scripts capture/replay private corpora, publish evaluated snapshots
-as new review-only runs, or replay deterministic rules. Keep corpora/results
+as new review-only runs, or replay the account's recipes. Keep corpora/results
 outside Git. Historical v2 suggestions are comparisons, not ground truth.
 Replayed snapshots remain subject to current-message validation when applied.
 

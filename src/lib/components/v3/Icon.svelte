@@ -1,5 +1,6 @@
 <script lang="ts" module>
-  export type IconName = 'conversation' | 'notification' | 'newsletter' | 'sales' | 'transaction' | 'other' | 'calendar' | 'paperclip' | 'chevron' | 'external' | 'refresh' | 'check' | 'undo';
+  export type IconName = 'conversation' | 'notification' | 'newsletter' | 'sales' | 'transaction' | 'other' | 'calendar' | 'paperclip' | 'chevron' | 'external' | 'refresh' | 'check' | 'undo'
+    | 'gear' | 'plus' | 'up' | 'down' | 'close' | 'zap' | 'book' | 'clock' | 'cpu' | 'arrow' | 'back';
 </script>
 
 <script lang="ts">
@@ -20,6 +21,17 @@
   {:else if name === 'refresh'}<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" /><path d="M21 3v5h-5M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" /><path d="M8 16H3v5" />
   {:else if name === 'check'}<path d="M20 6 9 17l-5-5" />
   {:else if name === 'undo'}<path d="M9 14 4 9l5-5" /><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11" />
+  {:else if name === 'gear'}<path d="M12.2 2h-.4a2 2 0 0 0-2 2v.2a2 2 0 0 1-1 1.7l-.4.3a2 2 0 0 1-2 0l-.2-.1a2 2 0 0 0-2.7.7l-.2.4a2 2 0 0 0 .7 2.7l.2.1a2 2 0 0 1 1 1.7v.6a2 2 0 0 1-1 1.7l-.2.1a2 2 0 0 0-.7 2.7l.2.4a2 2 0 0 0 2.7.7l.2-.1a2 2 0 0 1 2 0l.4.3a2 2 0 0 1 1 1.7v.2a2 2 0 0 0 2 2h.4a2 2 0 0 0 2-2v-.2a2 2 0 0 1 1-1.7l.4-.3a2 2 0 0 1 2 0l.2.1a2 2 0 0 0 2.7-.7l.2-.4a2 2 0 0 0-.7-2.7l-.2-.1a2 2 0 0 1-1-1.7v-.6a2 2 0 0 1 1-1.7l.2-.1a2 2 0 0 0 .7-2.7l-.2-.4a2 2 0 0 0-2.7-.7l-.2.1a2 2 0 0 1-2 0l-.4-.3a2 2 0 0 1-1-1.7V4a2 2 0 0 0-2-2Z" /><circle cx="12" cy="12" r="3" />
+  {:else if name === 'plus'}<path d="M12 5v14M5 12h14" />
+  {:else if name === 'up'}<path d="m18 15-6-6-6 6" />
+  {:else if name === 'down'}<path d="m6 9 6 6 6-6" />
+  {:else if name === 'close'}<path d="M18 6 6 18M6 6l12 12" />
+  {:else if name === 'zap'}<path d="M13 2 3 14h9l-1 8 10-12h-9z" />
+  {:else if name === 'book'}<path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20" />
+  {:else if name === 'clock'}<circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" />
+  {:else if name === 'cpu'}<rect width="14" height="14" x="5" y="5" rx="2" /><path d="M9 9h6v6H9zM9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3" />
+  {:else if name === 'arrow'}<path d="M5 12h14M13 6l6 6-6 6" />
+  {:else if name === 'back'}<path d="M19 12H5M11 18l-6-6 6-6" />
   {:else}<circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="1" fill="currentColor" />{/if}
 </svg>
 

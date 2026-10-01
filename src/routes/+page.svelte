@@ -12,7 +12,7 @@
   type Policy = { id: string; version_no: number; text: string; import_report: string | null };
   type RunData = {
     run: Run | null; policy: Policy | null; items: ReviewItem[]; calls: unknown[]; steps: unknown[];
-    replay?: { sourceRunId: string; assessedAt: number } | null; deterministicRules?: { name: string; version: number }[];
+    replay?: { sourceRunId: string; assessedAt: number } | null; setupNeeded?: boolean;
   };
   type Notice = { text: string; tone: 'info' | 'success' | 'error' };
   const EMPTY: RunData = { run: null, policy: null, items: [], calls: [], steps: [] };
@@ -29,7 +29,6 @@
   let focusedId = $state<string | null>(null);
   let busy = $state(false);
   let notice = $state<Notice | null>(null);
-  let showPolicy = $state(false);
   let showKeys = $state(false);
 
   const model = $derived(buildSections(data.items));
@@ -39,11 +38,6 @@
   const running = $derived(data.run?.status === 'running');
   const canApply = $derived(!!pending.length && !busy && data.run?.status === 'completed');
   const anyApplied = $derived(model.reviewed.some((i) => i.action_status === 'applied'));
-  const policyParagraphs = $derived((data.policy?.text ?? '').split(/\n\s*\n/).map((p) => {
-    const m = p.match(/^([A-Z][\w ,/&-]{2,40}):\s+([\s\S]*)$/);
-    return m ? { label: m[1], text: m[2] } : { label: null, text: p };
-  }));
-  const importInfo = $derived.by(() => { try { return data.policy?.import_report ? JSON.parse(data.policy.import_report) : null; } catch { return null; } });
   const tally = $derived(TALLY_ORDER.map((c) => ({ choice: c, n: pending.filter((d) => choiceOf(d) === c).length })).filter((t) => t.n));
   // Keyboard order follows the page, skipping rows inside collapsed groups.
   const order = $derived(model.sections.flatMap((s) => s.groups
@@ -248,20 +242,9 @@
       </span>
     {/if}
     <span class="spacer"></span>
-    {#if data.policy}<button class="quiet" aria-expanded={showPolicy} onclick={() => (showPolicy = !showPolicy)}>Policy v{data.policy.version_no}</button>{/if}
+    {#if accountId}<a class="quiet" href="/settings" title={data.policy ? `Guidance v${data.policy.version_no}, recipes and history` : 'Set up guidance and recipes'}><Icon name="gear" size={13} /> Settings</a>{/if}
     {#if data.run}<button class="btn" disabled={!accountId || busy || running} onclick={start}><Icon name="refresh" size={13} /> Check for new mail</button>{/if}
   </header>
-
-  {#if showPolicy && data.policy}
-    <section class="policy" aria-label="Assessment policy">
-      <p class="lede">Jev reads each thread against this versioned policy. Your review feedback can help refine it. Nothing changes in Gmail until you apply your decisions.
-        {#if data.deterministicRules?.length} Fixed rules ({data.deterministicRules.map((r) => `${r.name} v${r.version}`).join(', ')}) propose trash without asking Jev.{/if}</p>
-      <div class="policytext">
-        {#each policyParagraphs as p}<p>{#if p.label}<strong>{p.label}.</strong>{' '}{/if}{p.text}</p>{/each}
-      </div>
-      {#if importInfo}<details><summary>Policy history</summary><pre>{JSON.stringify(importInfo, null, 2)}</pre></details>{/if}
-    </section>
-  {/if}
 
   {#if data.run?.status === 'reauth_required'}
     <p class="banner warn">Gmail signed Mailward out. <a href="/auth">Reconnect Gmail</a>, then check for new mail.</p>
@@ -275,6 +258,9 @@
     <div class="sheet placeholder" aria-busy="true"><span class="spinner"></span> Loading your review…</div>
   {:else if !accounts.length}
     <div class="sheet welcome"><h2>Connect Gmail to start</h2><p>Mailward reads your unread mail, suggests what needs you and what can be cleared, and changes nothing until you apply.</p><a class="btn primary" href="/auth">Connect Gmail</a></div>
+  {:else if !data.run && data.setupNeeded}
+    <div class="sheet welcome"><h2>Welcome to Mailward</h2><p>Before the first check, take a minute to tell Jev whose inbox this is and how you like mail handled. You can skip it and start from sensible defaults; everything stays editable in Settings.</p>
+      <div class="ctas"><a class="btn primary" href="/settings">Set up Mailward</a><button class="quiet" disabled={busy} onclick={start}>Skip and use the defaults</button></div></div>
   {:else if !data.run}
     <div class="sheet welcome"><h2>Review your unread mail</h2><p>Jev sorts unread threads into what needs action, what is worth reading and what can be cleared. You decide each one; nothing changes in Gmail until you apply.</p><button class="btn primary" disabled={busy} onclick={start}>Check unread mail</button></div>
   {:else}
@@ -424,13 +410,7 @@
   .quiet:disabled { opacity: .45; cursor: default; }
   button:focus-visible, a:focus-visible, select:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
 
-  .policy { margin: 0 0 .9rem; padding: .9rem 1.1rem; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
-  .lede { margin: 0 0 .7rem; color: var(--ink-2); max-width: 80ch; line-height: 1.5; }
-  .policytext { columns: 2 34ch; column-gap: 2rem; color: var(--ink-2); font-size: 12.5px; line-height: 1.55; }
-  .policytext p { margin: 0 0 .7rem; break-inside: avoid; }
-  .policytext strong { color: var(--ink); }
-  .policy details summary { cursor: pointer; color: var(--ink-3); font-size: 12px; }
-  .policy pre, .rundetails pre { max-height: 24rem; overflow: auto; padding: .7rem; border-radius: 6px; background: var(--sunken); font: 11.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; }
+  .rundetails pre { max-height: 24rem; overflow: auto; padding: .7rem; border-radius: 6px; background: var(--sunken); font: 11.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; }
 
   .banner { margin: 0 0 .7rem; padding: .5rem .8rem; border-radius: 8px; background: var(--sunken); color: var(--ink-2); }
   .banner.warn { background: var(--warn-bg); color: var(--warn); }
@@ -459,6 +439,7 @@
   .placeholder { display: flex; align-items: center; gap: .6rem; }
   .welcome h2 { margin: 0 0 .4rem; font-size: 17px; color: var(--ink); }
   .welcome p { max-width: 60ch; margin: 0 0 1.1rem; line-height: 1.55; color: var(--ink-2); }
+  .ctas { display: flex; align-items: center; gap: .6rem; }
 
   .section + .section .band, .section.reviewed .band { border-top: 1px solid var(--line-strong); }
   .band {
