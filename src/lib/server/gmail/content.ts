@@ -1,20 +1,6 @@
-import { getGmailClient } from './client';
-export { sanitizeHtml } from './sanitize';
-
 export interface EmailContent {
 	html: string | null;
 	text: string | null;
-}
-
-export async function fetchEmailContent(accountId: string, messageId: string): Promise<EmailContent> {
-	const gmail = await getGmailClient(accountId);
-	const response = await gmail.users.messages.get({
-		userId: 'me',
-		id: messageId,
-		format: 'full'
-	});
-
-	return extractBody(response.data.payload);
 }
 
 export function extractBody(payload: any): EmailContent {

@@ -6,7 +6,7 @@ import { getGmailClient } from '../gmail/client';
 import { handleReauthCleanup } from '../gmail/reauth';
 import { extractBody } from '../gmail/content';
 import { sanitizeHtml } from '../gmail/sanitize';
-import { applyThreadAction, undoAction } from '../triage/apply';
+import { applyThreadAction, undoAction } from '../gmail/execution';
 import { deterministicHandling, saveDeterministicAssessment, CALENDAR_RESPONSE_RULE } from './deterministic';
 import { getOrCreatePolicy } from './policy';
 import { callJev, resolveHandling, RUBRIC_VERSION, V3_MODEL } from './assessment';
@@ -91,8 +91,6 @@ export async function startAssessment(accountId: string, limit = 100): Promise<s
   const sqlite = openV3Database();
   const account = sqlite.query('SELECT id FROM tokens WHERE id = ?').get(accountId);
   if (!account) { sqlite.close(); throw new Error('Account not connected'); }
-  const otherRun = sqlite.query("SELECT id FROM runs WHERE account_id = ? AND status = 'running' AND scope != 'v3' AND started_at > ? LIMIT 1").get(accountId, Date.now() - 30 * 60_000);
-  if (otherRun) { sqlite.close(); throw new ReviewError('A v2 run is active for this account', 409); }
   getOrCreatePolicy(sqlite, accountId);
   const id = crypto.randomUUID();
   sqlite.query('INSERT INTO runs (id, account_id, started_at, scope, status) VALUES (?, ?, ?, ?, ?)').run(id, accountId, Date.now(), 'v3', 'running');
@@ -233,7 +231,7 @@ export async function submitReviewedSet(accountId: string, runId: string, decisi
       if (target === 'leave') { out.push({ assessmentId: d.assessmentId, status: 'no_action' }); continue; }
       let applied;
       try {
-        applied = await applyThreadAction({ accountId, runId, ruleId: null, ruleVersionId: null, threadId: row.thread_id, action: target, mode: 'manual', source: 'manual', verdict: d.kind, note: d.note ?? null });
+        applied = await applyThreadAction({ accountId, runId, threadId: row.thread_id, action: target, verdict: d.kind, note: d.note ?? null });
       } catch (error) {
         sqlite.query('DELETE FROM v3_reviews WHERE id = ?').run(reviewId);
         throw error;

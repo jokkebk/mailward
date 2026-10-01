@@ -1,271 +1,124 @@
-# Mailward — Design
+# Mailward 3.0
 
-## Shipped v3 path
+Mailward assesses unread Gmail threads, proposes handling, and waits for explicit
+review before changing Gmail. The daily flow is fetch → bounded representation →
+assessment → handling proposal → review → reversible execution.
 
-The `/v3` route is an assessment-based, review-first path beside the legacy
-rule-centric UI at `/`. Its additive SQLite tables are `v3_policies`,
-`v3_assessments`, `v3_run_items`, `v3_reviews`, and `v3_call_logs`. A run links
-one assessment snapshot per thread; switching views never asks Jev again.
-Input identity includes message representation, policy, rubric, requested model,
-and a local date bucket for text with deadline cues. Partial model failures
-become unresolved rows. The backend service in `src/lib/server/v3/service.ts`
-owns runs, listing, reviewed-set validation, execution, and undo. The v2
-`applyThreadAction` and `undoAction` ledger remains the sole Gmail mutation path.
+## Assessment
 
-V3 maps act/read to TODO, with separate Needs action and Worth checking out
-lanes; glance mail must be shown before clearing; no-attention mail maps to
-archive or trash from retention. A human can override every row. Completion,
-correction, skip, and execution have separate fields. V3 never promotes itself
-to automation. The compact policy revision service replaces the policy text
-instead of appending a growing example history to each request.
+`src/lib/server/v3/service.ts` owns runs, cached assessments, content inspection,
+review validation, execution, and undo. SvelteKit's `/api/v3/` handlers adapt that
+service for the review page at `/`; `/v3` redirects to `/`.
 
-The rest of this document describes the preserved v2 rule engine and its
-historical design choices. See `V3.md` for v3's full plan and limits.
+A run scans unread inbox messages from the last 30 days, with a default limit of
+100 threads and a maximum of 200. New snapshots fetch full content for up to four
+unread messages per thread. The deterministic representation keeps headers,
+bounded body text, meaningful links, calendar details, and explicit flags for
+clipping, omitted unread messages, unread attachments, and unavailable content.
+It does not fetch conversation history for assessment. Human inspection can load
+the full conversation on demand, with sanitized HTML in a sandboxed frame.
 
-An email triage agent for cleaning up Gmail unread mail. AI proposes deletion / archival /
-labelling against triage rules; you approve, amend, or reject; rules that prove themselves get
-promoted to auto-apply. All actions are logged and reversible. A separate, smarter offline
-process learns from your feedback and improves the rules.
+A narrow, versioned deterministic rule handles bare calendar responses. Human
+notes, missing content, ordinary invitations, documents, and mixed-message
+threads fall through to Jev. Deterministic verdicts remain reviewable and form
+a collapsed group on the review page.
 
-## Philosophy
+Jev answers six typed questions: category, attention, retention, urgency,
+relevance, and evidence gap. Each request assesses one thread with all six
+questions and the compact policy; up to four requests run concurrently. Thread
+isolation avoids the cross-thread interference observed in the September audit.
+See [the quality audit](docs/v3-quality-audit-2026-09-30.md) for its evidence and
+limitations.
 
-- **The app does; Claude Code thinks.** A standalone TypeScript/Bun web app runs the daily
-  triage on a cheap-but-smart model (Haiku / Flash / mini). A Claude Code / Codex *skill*, run
-  on demand with a capable model, analyses feedback and proposes rule improvements.
-- **Automation only ever earns trust by proving itself while you watch.** Rules graduate
-  `proposing → auto`; the analysis process graduates `interactive → semi-autonomous`. Nothing
-  gains write-autonomy over your inbox without first being correct under your supervision.
-- **Everything is reversible.** Delete = trash (never permanent). Every action stores the prior
-  state it changed. Rollback at run / batch / individual granularity.
-- **Don't rebuild Gmail.** The value is triage automation + rule learning, not mail reading.
+Assessments preserve distributions and the exact representation. Cache identity
+includes input, policy, rubric, model, and relevant date context. Representation
+reuse avoids repeated body fetches. Missing or malformed answers stay unresolved
+and can be retried. Failed calls do not erase successful rows.
 
-## Architecture
+## Handling and review
 
-- **Runtime:** TypeScript + Bun web app (`bun run dev` → browser UI). Rich UI, local SQLite DB
-  alongside it. Single SQLite file = the whole system state (portable, mass-use friendly).
-- **Gmail:** via the existing OAuth + Gmail API integration (reused from another repo).
-- **Daily model:** one provider for now (choice deferred), called with a structured-output schema.
-- **Offline brain:** a repo skill the user runs in Claude Code / Codex.
+The deterministic resolver separates current attention from eventual retention:
 
-## Core concepts
+- Action or reply becomes **Needs action**, proposed as TODO.
+- Worthwhile reading becomes **Worth checking out**, also proposed as TODO.
+- A glance before disposal becomes **Show before clearing**.
+- No attention plus retention becomes **Archive**; disposable mail becomes **Trash**.
+- Conflicting evidence or material uncertainty becomes **Needs a decision**.
 
-### Rules (hybrid, versioned)
-A rule has: `name`, `priority` (integer), structured `match` (prefilter: sender glob, subject
-regex, label, age, calendar flags…), natural-language `intent`, `action`
-(`trash | archive | label_todo`), `tier` (`deterministic | ai`), `needs_body` (default false),
-and `status` (`proposing | auto | suspended`).
+`src/lib/v3/review.ts` assigns every live row to one section and orders/groups
+it. Obligations sort by urgency, worthwhile reading by relevance. Archive and
+Trash group by category. Rows stay in place while draft decisions change.
+Applied, failed, and undone receipts reflect the execution ledger.
 
-- **Deterministic tier:** pure structured match, executes in code, no model call.
-- **AI tier:** structured prefilter narrows candidates; the model adjudicates semantics.
-- A rule can be **hybrid** — e.g. "delete accepted/declined calendar mail *unless* there's a
-  human note" matches structurally but escalates to AI to check for a note before trashing.
+Rows offer TODO, Archive, Trash, Leave, and Done. Done records satisfied attention
+and requires explicit final handling. A different disposition is instance
+feedback; optional chips and notes add context. Completion is distinct from a
+classifier correction. Leave records review without a fabricated Gmail action.
 
-Rules are **versioned in SQLite** (not git): `rules` holds stable lineage + current status;
-`rule_versions` holds immutable definition snapshots. Each action references the exact
-`rule_version_id` that produced it → per-version performance lineage. A diff = comparing two
-version rows (rendered in UI / surfaced to the skill via a text helper).
+Draft choices persist locally across reloads. **Apply** submits the reviewed set.
+The service validates account/run membership, duplicate decisions, prior reviews,
+current unread message IDs, and show-before-clearing acknowledgement before
+execution. Gmail failures are isolated per action; OAuth failures surface as
+`reauth_required`. Show-before-clearing requires human acknowledgement, not merely
+an assessment by the model.
 
-**Editing a rule creates a new version and demotes it to `proposing`** (must re-earn trust).
-A manual UI override can force a version back to `auto`.
+There is no auto-apply or policy-promotion workflow. Existing automation trust is
+never inherited by a policy revision.
 
-### The daily run (rule-centric, claim-and-remove)
-1. Fetch **unread-in-inbox**, newest first, **cap 200** per run.
-2. Process rules **in priority order** (lowest number first). For each rule, candidates =
-   `(prefilter ∩ not-yet-claimed)`:
-   - **Deterministic** → act (or queue proposal) and **claim & remove** matched threads.
-   - **AI** → focused classifier over the candidate batch ("which of these match?"), batched
-     ~10–20 threads/call with the rule prompt cached. Returns
-     `{thread_id, rule_id, action, confidence (high/med/low), reason}`. Claim & remove matches.
-3. **Precedence is by priority integer only — status never reorders it.** A high-priority
-   `proposing` rule still claims (→ review) ahead of a low-priority `auto` rule.
-4. **Leftovers** (matched no rule) → the uncovered bucket.
+## Gmail and persistence
 
-You call AI **per email** (within a rule's focused pass), never per rule × email. Cost at
-Haiku/Flash prices for ~100–200 threads is single-digit cents.
+SQLite is the whole durable system state. `DATABASE_PATH` defaults to
+`./data/emails.db`. Drizzle migrations are applied at startup, and stale running
+sessions older than two hours are marked failed. Migration history is retained
+so both existing installations and empty fixture databases remain supported.
 
-### Confidence (coarse bands)
-Self-reported confidence is poorly calibrated, so use **high / med / low** bands only, never
-arithmetic, and never as the primary trust mechanism (that's trash + rollback + auto-demote).
-- **Proposing rules:** colour-code lines; optionally drop sub-floor matches to uncovered.
-- **Auto rules:** non-destructive (archive/label) low-confidence → **act, then flag** in the
-  digest with band-count badges. Destructive (trash) low-confidence → **fall back to a
-  proposal** (delete-is-special).
+Active records are `tokens`, `threads`, `runs`, `run_steps`, `actions`, plus
+`v3_policies`, `v3_assessments`, `v3_run_items`, `v3_reviews`, and `v3_call_logs`.
+Assessment, review, and Gmail execution are separate records. Policies are
+versioned; reviews retain actor/provenance and link to action receipts.
 
-### Model payload (privacy + cost)
-Default per thread: `from`, `to`, `subject`, snippet, date, labels, and cheap computed booleans
-(`is_calendar_invite`, `has_unsubscribe`, `in_reply_to_me`, `age_days`). Body is fetched and
-sent **only for rules that declare `needs_body`**. `local_only` sensitive-sender carve-out
-deferred.
+`src/lib/server/gmail/execution.ts` applies thread-level actions and records
+`prior_state` for undo. Archive clears INBOX and UNREAD; Trash uses Gmail trash,
+never permanent deletion; TODO adds the label and preserves unread state. Undo
+uses the stored payload and Gmail inverses. Trash/untrash preserves Gmail's
+message read states. OAuth refresh and reauthorization live in `gmail/`.
 
-## Review UI
+V2's rule engine, UI, APIs, classifiers, and maintenance scripts are retired to
+Git history (the `v2` tag records the baseline). Legacy rule, proposal, verdict,
+classification, and telemetry tables remain for historical records and snapshot
+comparisons. Existing accounts reuse their stored v3 policy; new accounts receive
+a generic starter policy. The daily app never reads legacy rules or verdicts.
+Schema cleanup must not drop historical records or rewrite old migrations.
 
-Proposals are grouped by rule (collapsible cards), but deterministic and AI rules use different
-review controls.
+## Offline learning and tooling
 
-### Deterministic rule review
+`bun run v3-report <accountId> --days 7` reads current policy text, lineage,
+assessment mix, reviewed-choice agreement by policy/rubric/model/source,
+corrections, completion, usage, execution, and undo. `--case` retrieves the exact
+stored evidence without Gmail calls. The repository weekly-review skill uses
+these helpers to propose compact improvements for approval. Done, Skip and
+unresolved reviews stay outside agreement denominators; deterministic verdicts
+are separate from Jev. A capable agent can propose bounded policy revisions
+using this evidence. `createPolicyRevision` appends a
+new review-first version; `v3-policy` previews a full replacement, then atomically
+checks the expected policy ID before applying an approved revision. No scheduled
+learner modifies production prompts.
 
-Deterministic rules propose one action for every matching thread. Threads are pre-checked,
-confidence is not needed, and the checkbox model stays natural. Three verbs:
+Evaluation scripts capture/replay private corpora, publish evaluated snapshots
+as new review-only runs, or replay deterministic rules. Keep corpora/results
+outside Git. Historical v2 suggestions are comparisons, not ground truth.
+Replayed snapshots remain subject to current-message validation when applied.
 
-| Verb | Applies | Metric effect | Note |
-|------|---------|---------------|------|
-| **Approve** | all checked | accepts | none |
-| **Amend** | checked subset | unchecked = negatives | optional, prompted |
-| **Reject** | nothing | whole batch counts against rule | **mandatory note** |
+Explicit reassessment with a larger representation, calibration on held-out
+cases, and CLI/MCP adapters remain follow-up work.
 
-Optional single-tap **"save this one"** on an unchecked item = "right rule, not this instance"
-→ excluded from the promotion metric in real time.
+## Development verification
 
-### AI router review
+Run `bun test`, `bun run check`, and `bun run build`. Tests cover representation
+safety, missing evidence, calendar handling, resolver mappings, migration/policy
+bootstrap, cached retries, stale/duplicate reviews, completion, acknowledgement,
+undo, and section/group ordering.
 
-AI router rules produce per-thread disposition recommendations. The rule card is still the
-container, but the review unit is the individual thread. Rows are sorted by suggested
-disposition, then confidence, and stay in their original suggested section while editing so the
-list does not jump.
-
-Each row shows the available dispositions in one button group:
-
-`Trash | Archive | TODO | Skip | Correct`
-
-- The AI suggestion is preselected.
-- The active choice uses filled/background styling.
-- The original AI suggestion keeps a stronger border, so changed rows are easy to spot.
-- AI reasons are hidden by default and shown on demand next to the row note field.
-- Notes are optional for any row except **Correct**, which requires one.
-- **Skip** means do nothing and learn nothing; it is excluded from promotion metrics.
-- **Correct** means do nothing but learn from the mistake; it counts as corrective feedback.
-- Changing `Archive → Trash`, `TODO → Archive`, etc. is automatically a correction: negative
-  evidence for the suggested disposition and positive evidence for the chosen disposition.
-
-AI router cards have top-level controls:
-
-- **Apply reviewed** — submits the current reviewed set. Row edits are drafts until this is
-  clicked; Gmail actions never fire while toggling row choices.
-- **Reset suggestions** — restores every row to the AI's original recommendation; no Gmail
-  action.
-- **Reject...** — rejects the whole group without Gmail action. The dialog requires a reason
-  and offers two final actions: **Send reason** or **Send reason and suspend rule**.
-
-### Shared review behavior
-
-- **Reject** / **Reject...** can suspend the rule until a new version revives it.
-- Near-misses are **not** shown per card (97% noise). Instead the uncovered bucket offers
-  "this should've been caught by rule X" to capture the valuable positive examples on demand.
-
-### Leftover / uncovered area (a learning launchpad, NOT a mail client)
-Lists unclaimed mail + your set-aside items. Affordances: the **same triage verbs as quick
-buttons** (archive / trash / TODO) logged as `mode=manual` (**this is the training corpus** —
-without it the skill is blind), a one-line **note for weekly analysis**, and a **"handle in
-Gmail" deep link** for mail needing real reading/replying.
-
-## Gmail action semantics & rollback
-
-- **delete = trash** (recoverable ~30 days; never permanent). Reversible pairs:
-  trash/untrash, read/unread, remove-INBOX/add-INBOX (archive/unarchive), add-TODO/remove-TODO.
-- **Thread-level** actions; model sees the latest unread message(s) for classification.
-- **Mark read on action**, except `label_todo` stays unread (still needs attention).
-- Every action stores `prior_state` → exact undo.
-- **Rollback granularity:** whole **run** / **batch** = `(run_id, rule_id)` / **individual**.
-  Rolled-back rows stay in the log (`status=rolled_back`) and **count as a rejection signal**.
-
-## Promotion to auto-apply
-
-- **Simple gate:** X applied-in-a-row at ≥ Y% approval over a rolling window.
-  **Delete demands a tighter bar (~99%)** than archive/label.
-- **Suggest-and-confirm** — the app suggests eligibility; **you click to promote**. Never
-  automatic.
-- **Auto-demote** on post-promotion rejections (a couple flip it back to `proposing`).
-- Gate inputs: applied = success; unchecked-**with-corrective-note** or batch-reject = failure;
-  unchecked-**no-note** and "save this one" = **excluded**; `failed` (API error) = excluded.
-  The gate never compares versions — only the current version's own recent window.
-
-### Auto-applied review (act silently, review after)
-Auto rules **act during the run** (no pre-confirm — that's the point), logged with `mode=auto`.
-A top-of-run **digest** summarises ("Cold outreach: 5 deleted · ⚠ 2 low-confidence"); expand to
-see threads and roll back. Notification = in-app digest (nothing happens while the app is
-closed). A post-hoc rejection is a strong demotion signal.
-
-## Analysis skill (the offline brain)
-
-Run on demand in Claude Code / Codex with a capable model. Reads (via a text helper, not raw
-SQLite): the actions log + your notes per rule version, per-version metrics, the uncovered-bucket
-history + manual fates, current rule definitions.
-
-Proposes (never silently applies): rule **edits** (new version + change note), **new rules**
-(mostly mined from uncovered clusters), **merges/deletions**, and a short report.
-
-**Invariants:**
-- **The skill can only ever create `proposing` rules — never `auto`.** Promotion is solely via
-  the daily gate + your confirm.
-- **You approve diffs in-session before they're written.**
-- **Never auto-rolls-back on version metrics.** Cross-version metrics are decision *support*
-  (with sample-size/time caveats), not a control signal. A "regression" is often the rule doing
-  something harder and more valuable; a human/agent-in-loop judges. Revert = a new version
-  copying the old definition (lineage preserved).
-
-**Two modes, a maturity progression (build interactive first):**
-- **Interactive (v2):** agent generates the review report, then you refine via conversation.
-  Rich, no UI to build, freer rein since you're in the loop. This is the weekly "autopilot off"
-  checkpoint.
-- **Semi-autonomous (later):** same report layer, but proposals surface in the app UI for async
-  override; can run weekly unattended. Built once you trust the proposals.
-
-## Failure handling & operational reality
-
-- **Action lifecycle:** `proposed → approved → applying → applied | failed`. Row exists before
-  the Gmail mutation, so a crash never loses intent.
-- **Per-action isolation:** one thread's failure doesn't abort the batch ("11 applied, 1 failed
-  ▸ retry"). Retry is idempotent (check current Gmail state first; already-done = done).
-- **Model-call failures:** affected threads stay uncovered, reappear next run (no mutation).
-- **`failed` never counts toward promotion metrics.**
-- **OAuth weekly reauth:** experimental Google apps expire the refresh token every ~7 days
-  (`invalid_grant`). Detect at **run start**, surface a **"Reauthorize"** action, then continue —
-  never a mid-run death, never pollutes metrics. This lands naturally on the **weekly analysis
-  checkpoint** (reauth → run skill → review proposals = one ritual).
-
-## Cold start
-
-System has zero rules on day one. Universal path: **accumulate an uncovered pool → run the
-analysis skill over it → get your real starter rules.**
-- Seed only a **couple of obvious deterministic rules** (calendar cleanup, an obvious
-  newsletter archive) so run #1 isn't empty.
-- First instruction for everyone: run the skill over the pool before expecting much.
-- Personal bootstrap: point the agent at the old **mailnick** system + your data to author the
-  first rules — a richer version of the same first step.
-- The first week is intentionally a training-data accumulation phase (value compounds).
-
-## Data model (SQLite, sketch)
-
-```
-rules         : rule_id (PK, lineage), name, status (proposing|auto|suspended), current_version_id
-rule_versions : version_id (PK), rule_id, version_no, priority, match (JSON), intent,
-                action, tier, needs_body, created_at, created_by (human|skill), change_note, is_current
-runs          : run_id (PK), started_at, ended_at, scope, status
-actions       : action_id (PK), run_id, rule_id, rule_version_id, thread_id, message_ids (JSON),
-                action, prior_state (JSON), source (deterministic|ai), confidence (high|med|low),
-                mode (proposed|auto|manual), status (applied|rolled_back|failed),
-                verdict (approve|amend_skip|reject|save|none), reject_reason, note,
-                created_at, applied_at, rolled_back_at, error
-verdicts/dedup: keyed on (thread_id, rule_version_id) so resolved threads aren't re-surfaced
-ai_classifications: keyed on (account_id, rule_version_id, thread_id), caches AI outcomes
-                including leave so reruns only classify newly seen candidates
-```
-
-## Build sequence
-
-### v1 — the manual spine (replicates mailnick + captures training data)
-1. **Gmail auth + reauth flow + fetch unread-in-inbox** (cap 200).
-2. **SQLite schema:** rules / rule_versions / actions / runs.
-3. **Deterministic tier + rule-centric loop with claim-and-remove** (2–3 hand-written rules).
-4. **Review screen:** rule-grouped cards, Approve/Amend/Reject, actions log, rollback at
-   run/batch/individual.
-5. **Leftover area** with manual-disposition capture (training data) + Gmail handoff.
-
-v1 is a usable manual triage tool with rollback, and it *generates the corpus* the learning
-features need — so manual-first is the dependency order, not a compromise.
-
-### v2+ — AI + learning (design settled, deferred)
-- AI tier + confidence bands.
-- Promotion gate + auto-apply + digest.
-- Analysis skill (interactive first), per-version metrics.
-- Semi-autonomous UI surfacing.
+Never run implementation tests against the original live database. Preview with
+`scripts/v3-fixture.ts` and a separate `DATABASE_PATH`; fixtures contain no usable
+Gmail credentials. See [README](README.md) for setup and preview commands.

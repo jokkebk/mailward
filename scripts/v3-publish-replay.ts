@@ -5,7 +5,8 @@
 import { Database } from 'bun:sqlite';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { getOrCreatePolicy, createPolicyRevision, AUDIT_POLICY } from '../src/lib/server/v3/policy';
+import { getOrCreatePolicy, createPolicyRevision } from '../src/lib/server/v3/policy';
+import { AUDIT_POLICY } from './lib/v3-audit-policy';
 import { resolveHandling, RUBRIC_VERSION, V3_MODEL, parseAssessment } from '../src/lib/server/v3/assessment';
 import { REPRESENTATION_VERSION } from '../src/lib/server/v3/representation';
 

@@ -8,6 +8,8 @@ mock.module('$env/dynamic/private', () => ({ env: process.env }));
 const dbPath = `/tmp/mailward-v3-review-${process.pid}-${Date.now()}.db`;
 process.env.DATABASE_PATH = dbPath;
 const mutations: string[] = [];
+const labelChanges: { add: string[]; remove: string[] }[] = [];
+let actionFailure: Error | null = null;
 let liveIds = ['m1'];
 let fullFetches = 0;
 mock.module('../src/lib/server/gmail/client', () => ({
@@ -24,10 +26,11 @@ mock.module('../src/lib/server/gmail/client', () => ({
 mock.module('../src/lib/server/gmail/thread-actions', () => ({
   async archiveThread(_a: string, id: string) { mutations.push(`archive:${id}`); },
   async trashThread(_a: string, id: string) { mutations.push(`trash:${id}`); },
-  async labelThreadTodo(_a: string, id: string) { mutations.push(`todo:${id}`); return 'TODO'; },
-  async markThreadRead() {}, async untrashThread(_a: string, id: string) { mutations.push(`untrash:${id}`); },
-  async modifyThreadLabels(_a: string, id: string) { mutations.push(`modify:${id}`); }
+  async labelThreadTodo(_a: string, id: string) { if (actionFailure) throw actionFailure; mutations.push(`todo:${id}`); return 'TODO'; },
+  async untrashThread(_a: string, id: string) { mutations.push(`untrash:${id}`); },
+  async modifyThreadLabels(_a: string, id: string, add: string[], remove: string[]) { mutations.push(`modify:${id}`); labelChanges.push({ add, remove }); }
 }));
+const { applyThreadAction, undoAction } = await import('../src/lib/server/gmail/execution');
 const { submitReviewedSet, undoReviewedAction, ReviewError, startAssessment, listRun } = await import('../src/lib/server/v3/service');
 
 function db() { return new Database(dbPath); }
@@ -126,6 +129,43 @@ describe('v3 reviewed set', () => {
     expect(mutations.at(-1)).toBe('trash:t');
     const sqlite = db();
     expect((sqlite.query("SELECT kind, acknowledged FROM v3_reviews WHERE assessment_id = 'a3'").get() as any)).toEqual({ kind: 'approve', acknowledged: 1 });
+    const receipt = sqlite.query("SELECT action_id FROM v3_reviews WHERE assessment_id = 'a3'").get() as { action_id: string };
     sqlite.close();
+    await undoReviewedAction('a', receipt.action_id);
+    expect(mutations.slice(-2)).toEqual(['untrash:t', 'modify:t']);
+    expect(labelChanges.at(-1)).toEqual({ add: ['INBOX'], remove: [] });
+  });
+  test('shared executor keeps TODO unread, scopes undo to the account, and restores labels', async () => {
+    const result = await applyThreadAction({ accountId: 'a', runId: 'r', threadId: 't', action: 'label_todo', verdict: 'approve' });
+    expect(result.status).toBe('applied');
+    const sqlite = db();
+    const thread = sqlite.query("SELECT is_unread, label_ids FROM threads WHERE id = 't'").get() as any;
+    expect(thread.is_unread).toBe(1);
+    expect(JSON.parse(thread.label_ids)).toContain('TODO');
+    const receipt = sqlite.query('SELECT mode, rule_id, rule_version_id, prior_state FROM actions WHERE id = ?').get(result.actionId!) as any;
+    expect(receipt.mode).toBe('manual');
+    expect(receipt.rule_id).toBeNull(); expect(receipt.rule_version_id).toBeNull();
+    expect(JSON.parse(receipt.prior_state).addedLabelId).toBe('TODO');
+    const before = mutations.length;
+    expect((await undoAction('other-account', result.actionId!)).status).toBe('failed');
+    expect(mutations.length).toBe(before);
+    expect((await undoAction('a', result.actionId!)).status).toBe('applied');
+    expect(labelChanges.at(-1)).toEqual({ add: [], remove: ['TODO'] });
+    expect(JSON.parse((sqlite.query("SELECT label_ids FROM threads WHERE id = 't'").get() as any).label_ids)).toEqual(['INBOX', 'UNREAD']);
+    sqlite.close();
+  });
+  test('shared executor logs Gmail failure and propagates reauth without an action', async () => {
+    const sqlite = db();
+    const count = () => (sqlite.query('SELECT count(*) AS n FROM actions').get() as { n: number }).n;
+    try {
+      actionFailure = new Error('Gmail unavailable');
+      const failed = await applyThreadAction({ accountId: 'a', runId: 'r', threadId: 't', action: 'label_todo', verdict: 'approve' });
+      expect(failed.status).toBe('failed');
+      expect((sqlite.query('SELECT status, error FROM actions WHERE id = ?').get(failed.actionId!) as any)).toEqual({ status: 'failed', error: 'Gmail unavailable' });
+      const before = count();
+      actionFailure = Object.assign(new Error('Reauthorize'), { code: 'reauth_required' });
+      await expect(applyThreadAction({ accountId: 'a', runId: 'r', threadId: 't', action: 'label_todo', verdict: 'approve' })).rejects.toMatchObject({ code: 'reauth_required' });
+      expect(count()).toBe(before);
+    } finally { actionFailure = null; sqlite.close(); }
   });
 });

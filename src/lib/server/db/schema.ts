@@ -1,19 +1,10 @@
 import { sqliteTable, text, integer, real, index, uniqueIndex, primaryKey } from 'drizzle-orm/sqlite-core';
 
 /**
- * Mailward schema.
- *
- * Design (see DESIGN.md):
- * - Rules are VERSIONED: `rules` holds stable lineage + operational status,
- *   `ruleVersions` holds immutable definition snapshots. Every action records
- *   the exact `ruleVersionId` that produced it -> per-version performance lineage.
- * - A `run` is one launch-to-close triage session.
- * - `actions` is the unified, reversible log; each row stores `priorState` so
- *   undo is exact at run / batch / individual granularity.
- * - `verdicts` capture the dedup + training signal keyed on (thread, ruleVersion),
- *   including decisions that produced no Gmail mutation (reject / save-this-one).
- *
- * Column names are snake_case in SQLite.
+ * Active review records share tokens, threads, runs, runSteps and actions with
+ * historical v2 records. Legacy rule/proposal/cache tables are retained for
+ * history and offline comparisons; no rule engine runs them.
+ * Column names are snake_case in SQLite. See DESIGN.md.
  */
 
 export const tokens = sqliteTable('tokens', {
@@ -39,13 +30,13 @@ export const threads = sqliteTable('threads', {
 	labelIds: text('label_ids'), // JSON array of the thread's current labels
 	messageIds: text('message_ids'), // JSON array of message ids in the thread
 	rawHeaders: text('raw_headers'), // JSON, latest message headers (debugging)
-	// Cheap computed signals (DESIGN.md §"Model payload"): prefilter inputs + AI payload.
+	// Content signals retained on the thread snapshot.
 	hasUnsubscribe: integer('has_unsubscribe', { mode: 'boolean' }).default(false),
 	isCalendarInvite: integer('is_calendar_invite', { mode: 'boolean' }).default(false),
 	syncedAt: integer('synced_at', { mode: 'timestamp' }).notNull()
 });
 
-/** Stable rule lineage + operational state. Definition lives in ruleVersions. */
+/** Historical v2 rule lineage; retained for offline comparisons, never executed. */
 export const rules = sqliteTable('rules', {
 	id: text('id').primaryKey().$defaultFn(() => crypto.randomUUID()),
 	accountId: text('account_id')
@@ -216,7 +207,7 @@ export const actions = sqliteTable('actions', {
 	accountId: text('account_id')
 		.notNull()
 		.references(() => tokens.id),
-	ruleId: text('rule_id'), // null for manual leftover dispositions
+	ruleId: text('rule_id'), // null for v3 and historical manual actions
 	ruleVersionId: text('rule_version_id'),
 	threadId: text('thread_id').notNull(),
 	messageIds: text('message_ids'), // JSON
@@ -267,7 +258,7 @@ export const verdicts = sqliteTable('verdicts', {
  * Per-thread classification produced AT RUN TIME, before any decision. Unlike
  * deterministic matches (recomputable for free), an AI verdict is expensive and
  * non-deterministic, so it must be persisted: the review UI + apply read it here,
- * reloads rehydrate from it, and a crash never loses intent (DESIGN.md lifecycle).
+ * historical v2 runs used it to rehydrate review intent after a reload or crash.
  * One row per (run, rule, thread). A `leave` disposition produces NO row — the
  * thread simply isn't claimed and falls through to lower-priority rules / uncovered.
  */

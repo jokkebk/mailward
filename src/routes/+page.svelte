@@ -249,18 +249,17 @@
     {/if}
     <span class="spacer"></span>
     {#if data.policy}<button class="quiet" aria-expanded={showPolicy} onclick={() => (showPolicy = !showPolicy)}>Policy v{data.policy.version_no}</button>{/if}
-    <a class="quiet" href="/v2">Rule view</a>
     {#if data.run}<button class="btn" disabled={!accountId || busy || running} onclick={start}><Icon name="refresh" size={13} /> Check for new mail</button>{/if}
   </header>
 
   {#if showPolicy && data.policy}
     <section class="policy" aria-label="Assessment policy">
-      <p class="lede">Jev reads each thread against this policy, distilled from {importInfo?.sourceRuleCount ?? 0} earlier rules and your feedback. Nothing changes in Gmail until you apply your decisions.
+      <p class="lede">Jev reads each thread against this versioned policy. Your review feedback can help refine it. Nothing changes in Gmail until you apply your decisions.
         {#if data.deterministicRules?.length} Fixed rules ({data.deterministicRules.map((r) => `${r.name} v${r.version}`).join(', ')}) propose trash without asking Jev.{/if}</p>
       <div class="policytext">
         {#each policyParagraphs as p}<p>{#if p.label}<strong>{p.label}.</strong>{' '}{/if}{p.text}</p>{/each}
       </div>
-      {#if importInfo}<details><summary>Import details</summary><pre>{JSON.stringify(importInfo, null, 2)}</pre></details>{/if}
+      {#if importInfo}<details><summary>Policy history</summary><pre>{JSON.stringify(importInfo, null, 2)}</pre></details>{/if}
     </section>
   {/if}
 

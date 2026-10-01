@@ -1,31 +1,23 @@
 import { db } from '../db';
-import { actions, rules, threads, verdicts } from '../db/schema';
+import { actions, threads } from '../db/schema';
 import { and, eq } from 'drizzle-orm';
 import {
 	archiveThread,
 	labelThreadTodo,
-	markThreadRead,
 	modifyThreadLabels,
 	trashThread,
 	untrashThread
 } from '../gmail/thread-actions';
-import type { Confidence, RuleAction } from '$lib/types/rules';
+import type { Handling } from '$lib/types/v3';
 
-type ActionVerb = RuleAction | 'mark_read';
-type Mode = 'proposed' | 'auto' | 'manual';
-type Source = 'deterministic' | 'ai' | 'manual';
+type ActionVerb = Exclude<Handling, 'leave'>;
 
 interface ApplyOpts {
 	accountId: string;
 	runId: string | null;
-	ruleId: string | null;
-	ruleVersionId: string | null;
 	threadId: string;
 	action: ActionVerb;
-	mode: Mode;
-	source: Source;
 	verdict: string;
-	confidence?: Confidence | null;
 	note?: string | null;
 }
 
@@ -69,11 +61,6 @@ export async function applyThreadAction(opts: ApplyOpts): Promise<ApplyOutcome> 
 				if (!nextLabels.includes('TODO')) nextLabels.push('TODO');
 				break; // stays unread by design
 			}
-			case 'mark_read':
-				await markThreadRead(opts.accountId, opts.threadId);
-				nextUnread = false;
-				nextLabels = nextLabels.filter((l) => l !== 'UNREAD');
-				break;
 		}
 
 		const inserted = await db
@@ -81,15 +68,15 @@ export async function applyThreadAction(opts: ApplyOpts): Promise<ApplyOutcome> 
 			.values({
 				runId: opts.runId,
 				accountId: opts.accountId,
-				ruleId: opts.ruleId,
-				ruleVersionId: opts.ruleVersionId,
+				ruleId: null,
+				ruleVersionId: null,
 				threadId: opts.threadId,
 				messageIds: row.messageIds,
 				action: opts.action,
 				priorState: JSON.stringify(priorState),
-				source: opts.source,
-				confidence: opts.confidence ?? null,
-				mode: opts.mode,
+				source: 'manual',
+				confidence: null,
+				mode: 'manual',
 				status: 'applied',
 				verdict: opts.verdict,
 				note: opts.note ?? null,
@@ -112,15 +99,15 @@ export async function applyThreadAction(opts: ApplyOpts): Promise<ApplyOutcome> 
 		const failed = await db.insert(actions).values({
 			runId: opts.runId,
 			accountId: opts.accountId,
-			ruleId: opts.ruleId,
-			ruleVersionId: opts.ruleVersionId,
+			ruleId: null,
+			ruleVersionId: null,
 			threadId: opts.threadId,
 			messageIds: row.messageIds,
 			action: opts.action,
 			priorState: JSON.stringify(priorState),
-			source: opts.source,
-			confidence: opts.confidence ?? null,
-			mode: opts.mode,
+			source: 'manual',
+			confidence: null,
+			mode: 'manual',
 			status: 'failed',
 			verdict: opts.verdict,
 			error: msg,
@@ -128,74 +115,6 @@ export async function applyThreadAction(opts: ApplyOpts): Promise<ApplyOutcome> 
 		}).returning({ id: actions.id }).get();
 		return { threadId: opts.threadId, status: 'failed', actionId: failed.id, error: msg };
 	}
-}
-
-/** Record a decision that produced no Gmail mutation (skip / save / reject). */
-export async function recordVerdict(opts: {
-	accountId: string;
-	runId: string | null;
-	ruleId: string;
-	ruleVersionId: string;
-	threadId: string;
-	verdict: 'amend_skip' | 'save' | 'reject' | 'correct';
-	note?: string | null;
-}): Promise<void> {
-	await db.insert(verdicts).values({
-		accountId: opts.accountId,
-		threadId: opts.threadId,
-		ruleVersionId: opts.ruleVersionId,
-		ruleId: opts.ruleId,
-		runId: opts.runId,
-		verdict: opts.verdict,
-		excludeFromMetric: opts.verdict === 'save',
-		note: opts.note ?? null,
-		createdAt: new Date()
-	});
-}
-
-/** Also record an "approve" verdict alongside an applied action, for dedup. */
-export async function recordApproveVerdict(opts: {
-	accountId: string;
-	runId: string | null;
-	ruleId: string;
-	ruleVersionId: string;
-	threadId: string;
-	note?: string | null;
-}): Promise<void> {
-	await db.insert(verdicts).values({
-		accountId: opts.accountId,
-		threadId: opts.threadId,
-		ruleVersionId: opts.ruleVersionId,
-		ruleId: opts.ruleId,
-		runId: opts.runId,
-		verdict: 'approve',
-		note: opts.note ?? null,
-		createdAt: new Date()
-	});
-}
-
-export async function suspendRule(accountId: string, ruleId: string): Promise<void> {
-	await db
-		.update(rules)
-		.set({ status: 'suspended', updatedAt: new Date() })
-		.where(and(eq(rules.id, ruleId), eq(rules.accountId, accountId)));
-}
-
-/**
- * Undo a suspension. Back to 'proposing', never straight to 'auto' — a rule that
- * was switched off has to earn auto-apply through the gate again.
- */
-export async function resumeRule(accountId: string, ruleId: string): Promise<void> {
-	const rule = await db
-		.select({ id: rules.id })
-		.from(rules)
-		.where(and(eq(rules.id, ruleId), eq(rules.accountId, accountId)))
-		.get();
-	if (!rule) throw new Error('Rule not found for this account.');
-	await db
-		.update(rules)
-		.set({ status: 'proposing', updatedAt: new Date() })
-		.where(and(eq(rules.id, ruleId), eq(rules.accountId, accountId)));
 }
 
 /** Reverse a single applied action using its stored prior state. */
@@ -251,25 +170,6 @@ export async function undoAction(accountId: string, actionId: string): Promise<A
 			.update(threads)
 			.set({ isUnread: prior.isUnread, labelIds: JSON.stringify(prior.labelIds) })
 			.where(eq(threads.id, action.threadId));
-
-		// Undoing an AUTO action puts the thread back in the unread pool, where the
-		// same promoted rule would match and re-apply it on the next run — an undo
-		// the user can never win. Record a metric-excluded verdict so the run loop's
-		// dedup treats this (thread, version) as decided. The rollback itself is
-		// already the gate's failure signal, so this must not double-count as one.
-		if (action.mode === 'auto' && action.ruleId && action.ruleVersionId) {
-			await db.insert(verdicts).values({
-				accountId,
-				threadId: action.threadId,
-				ruleVersionId: action.ruleVersionId,
-				ruleId: action.ruleId,
-				runId: action.runId,
-				verdict: 'save',
-				excludeFromMetric: true,
-				note: 'undone by hand after auto-apply',
-				createdAt: new Date()
-			});
-		}
 
 		return { threadId: action.threadId, status: 'applied', actionId };
 	} catch (error) {

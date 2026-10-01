@@ -1,7 +1,7 @@
 import type { Assessment, Attention, Category, ChoiceAnswer, Gap, Handling, Representation, Retention, ScoreAnswer } from '$lib/types/v3';
 
 export const V3_MODEL = 'typesafe/jev-1.13';
-export const RUBRIC_VERSION = 2;
+export const RUBRIC_VERSION = 3;
 const ENDPOINT = 'https://openrouter.ai/api/alpha/decisions';
 
 const choice = (instructions: string, criteria: Record<string, string>) => ({ type: 'choice', instructions, criteria });
@@ -14,8 +14,8 @@ export function buildAssessmentRequest(reps: Representation[], policy: string, n
     questions[`t${i}_category`] = choice(`${ref} What kind of mail is this?`, {
       sales: 'Sales or promotion', notification: 'System or service notification', newsletter: 'Newsletter or digest', transaction: 'Receipt, invoice, order, or account transaction', conversation: 'Human correspondence', other: 'Other'
     });
-    questions[`t${i}_attention`] = choice(`${ref} What attention does Alex personally need now? A notification offering an optional admin control is not a task. Do not require a glance for routine notices or generic promotion unless the policy explicitly requires it. Context needed to perform a known task does not negate that task. Explicit policy handling exceptions outrank generic wording such as invoices awaiting your actions. Direct requests for document access to Alex as owner are actions, not routine Docs notices. For calendar.responseOnly, no task is being requested. For calendar.ended, an optional RSVP cannot still be pending.`, {
-      act: 'An established obligation for Alex to act, decide, or reply remains outstanding', read: 'Substantive material worth reading or an expected proposal to consider, without a definite obligation', glance: 'Policy specifically requires showing this reminder before clearing; otherwise choose none for routine FYI', none: 'No remaining personal attention required; routine FYI, generic promotion, someone else owns it, or event already passed', unclear: 'Cannot tell from available evidence'
+    questions[`t${i}_attention`] = choice(`${ref} What attention does the account holder personally need now? A notification offering an optional admin control is not a task. Do not require a glance for routine notices or generic promotion unless the policy explicitly requires it. Context needed to perform a known task does not negate that task. Explicit policy handling exceptions outrank generic wording such as invoices awaiting your actions. Direct requests for document access to the recipient as owner are actions, not routine Docs notices. For calendar.responseOnly, no task is being requested. For calendar.ended, an optional RSVP cannot still be pending.`, {
+      act: 'An established obligation for the account holder to act, decide, or reply remains outstanding', read: 'Substantive material worth reading or an expected proposal to consider, without a definite obligation', glance: 'Policy specifically requires showing this reminder before clearing; otherwise choose none for routine FYI', none: 'No remaining personal attention required; routine FYI, generic promotion, someone else owns it, or event already passed', unclear: 'Cannot tell from available evidence'
     });
     questions[`t${i}_retention`] = choice(`${ref} After any immediate attention, should this be retained?`, {
       keep: 'Keep as a record or useful reference', disposable: 'Can be discarded after required attention', unclear: 'Cannot tell from available evidence'
@@ -23,8 +23,8 @@ export function buildAssessmentRequest(reps: Representation[], policy: string, n
     questions[`t${i}_urgency`] = score(`${ref} What is the consequence of delaying relevant attention? Ignore alarming wording without concrete consequence.`, [
       'No time consequence or no attention required', 'Useful to handle eventually with no near deadline', 'Near deadline or meaningful delay cost', 'Immediate deadline or material risk if delayed'
     ]);
-    questions[`t${i}_relevance`] = score(`${ref} How valuable is this to Alex given his responsibilities and interests?`, [
-      'Generic noise or unrelated', 'Some possible interest but little specific value', 'Relevant to his work or interests', 'Highly relevant direct responsibility or valuable opportunity'
+    questions[`t${i}_relevance`] = score(`${ref} How valuable is this to the account holder given the responsibilities and interests established in the policy?`, [
+      'Generic noise or unrelated', 'Some possible interest but little specific value', 'Relevant to the account holder’s work or interests', 'Highly relevant direct responsibility or valuable opportunity'
     ]);
     questions[`t${i}_gap`] = choice(`${ref} Is evidence missing that would change the handling recommendation? A known approval or requested proposal already establishes TODO even if deciding the answer requires user context or reading a link. Use sufficient when the body establishes the handling; do not flag unread signature images, calendar .ics files, or optional linked background. Use a gap when its contents could change whether this needs attention or is safe to clear.`, {
       sufficient: 'Enough to assess', more_body: 'More message body needed', conversation: 'Prior thread context needed', attachment: 'Attachment contents needed', user_context: 'Need knowledge of current user situation'

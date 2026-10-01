@@ -1,21 +1,21 @@
-# Mailward
+# Mailward 3.0
 
 An email triage agent for unread Gmail. V3 assesses each thread once and lays
 the results out on one review page. You decide what to do; Gmail changes are
 logged and reversible.
 
-See [DESIGN.md](DESIGN.md) for the full design and roadmap.
+See [DESIGN.md](DESIGN.md) for the current architecture and
+[CONTEXT.md](CONTEXT.md) for domain language. V2 is retired to Git history;
+the `v2` tag preserves the rule-centric baseline.
 
-The [v3 architecture and implementation plan](V3.md) records the design. Git tag
-`v2` preserves the rule-centric baseline, still available at `/v2` for comparison.
-
-## V3 workflow
+## Workflow
 
 Open `/`, select your Gmail account, and choose **Check unread mail**. V3 fetches full
 unread message content for new snapshots, prepares a bounded plain-text record,
-and asks Jev six typed questions per thread in batches: category, attention,
+and asks Jev six typed questions per thread: category, attention,
 retention, urgency, relevance, and evidence gap. A compact versioned policy is
-shared once per batch. Up to four batches run concurrently. Missing or malformed
+included once per request. Each request assesses one thread; up to four requests
+run concurrently. Missing or malformed
 evidence stays unresolved. Existing snapshots are reused when the message,
 policy, rubric, model, and relevant date context match.
 
@@ -34,36 +34,9 @@ Rows offer the exact representation Jev saw and an on-demand sanitized view of
 the full conversation. Individual applied actions can be undone. V3 imports no
 automation trust from legacy rules, and a new policy revision stays review-first.
 
-For a fixture-only preview, run `bun run scripts/v3-fixture.ts /tmp/mailward-v3-fixture.db`
-and start the app with `DATABASE_PATH=/tmp/mailward-v3-fixture.db` and dummy OAuth
-environment values. The fixture cannot mutate live Gmail. For offline learning,
-`DATABASE_PATH=... bun run v3-report <accountId>` prints policy lineage, assessment
-mix, corrections, completion, execution, undo, and usage. Keep examples in a
-separate local evaluation corpus and validate revisions against held-out cases.
-
-V3 currently has no auto-apply or policy-promotion workflow. Explicit larger-
-representation reassessment, richer calibration studies, and CLI/MCP adapters
-remain follow-up work. Do not use the legacy v2 auto-apply mode as a substitute
-for v3 review.
-
-## Legacy v2 workflow
-
-Mailward combines deterministic and AI rules, with a review step for proposals:
-
-- Connect Gmail (OAuth) with weekly-reauth handling.
-- **Run triage**: syncs unread-in-inbox (cap 300), evaluates rules in priority order
-  with claim-and-remove, and presents proposals grouped by rule.
-- **Approve / Amend / Reject** each group (Reject can also suspend the rule). "Save this
-  one" excludes an item from future metrics.
-- **Uncovered launchpad**: manually Archive / Trash / → TODO leftover threads (logged as
-  training data), or open them in Gmail.
-- **History + rollback** at run / batch / individual granularity (delete = trash, so undo
-  = untrash).
-- **Jev trial**: when `OPENROUTER_API_KEY` is configured, the run switch appears
-  and defaults on. Switch it off to use the classifier selected by `AI_PROVIDER`.
-  Jev trash suggestions always wait for review during the trial.
-
-See DESIGN.md for the rule and promotion model.
+V3 currently has no auto-apply or policy-promotion workflow. Explicit larger
+representations, richer calibration studies, and CLI/MCP adapters remain
+follow-up work.
 
 ## Setup
 
@@ -87,8 +60,47 @@ bun run dev            # http://localhost:4873
 
 You can reuse the same Google project as mailnick — just add the `:4873` redirect URI.
 
-Set `OPENROUTER_API_KEY` in `.env` to show the Jev switch. Without it, the
-existing `AI_PROVIDER` / model settings are used automatically.
+Set `OPENROUTER_API_KEY` in `.env` to assess mail with Jev through OpenRouter.
+It is the only assessment provider used by the app.
+
+## Fixture preview and verification
+
+```bash
+bun run scripts/v3-fixture.ts /tmp/mailward-v3-fixture.db
+DATABASE_PATH=/tmp/mailward-v3-fixture.db GOOGLE_CLIENT_ID=fixture GOOGLE_CLIENT_SECRET=fixture GOOGLE_REDIRECT_URI=http://localhost:4873/auth/callback bun run dev
+```
+
+The fixture supports reviewing the UI without usable Gmail credentials. Do not
+apply fixture decisions or check new mail. Never test against the live database.
+Run `bun test` and `bun run check`; use the same fixture environment for
+`bun run build`, since the build initializes the server.
+
+## Weekly policy review
+
+Invoke `$weekly-review` in this repository, or ask for a weekly v3 review. The
+[skill](.agents/skills/weekly-review/SKILL.md) reads feedback, investigates cases,
+and proposes compact policy changes for approval. It is also available to Claude
+through the repository's `.claude/skills/weekly-review/` entry.
+
+```bash
+bun run v3-report <accountId> --days 7
+bun run v3-report <accountId> --days 30 --json
+bun run v3-report <accountId> --case <assessmentId>
+```
+
+Reports separate agreement by policy, rubric, model and source. Done, Leave and
+unresolved decisions do not count as classifier corrections; undo and execution
+failures are separate signals. Exact stored email evidence is available on demand.
+The report is read-only and makes no Gmail or Jev calls.
+
+`bun run v3-policy data/proposal.json` previews a replacement; adding `--apply`
+appends the approved policy revision and rejects stale proposals. Keep private
+proposals and evaluation corpora outside Git. Validate revisions on held-out cases;
+reviewed-choice agreement is not an inbox-wide accuracy measure.
+
+Existing accounts reuse their stored v3 policies. New accounts receive a generic
+starter policy; normal app startup and runs never consult v2 rules or verdicts.
+See [DESIGN.md](DESIGN.md) for the historical snapshot evaluation/replay tools.
 
 ## Tech stack
 
@@ -98,8 +110,10 @@ existing `AI_PROVIDER` / model settings are used automatically.
 
 ## Layout
 
-- `src/lib/server/gmail/` — OAuth, token refresh, reauth detection, thread-level actions, sync
-- `src/lib/server/db/` — Drizzle schema (versioned rules, runs, actions, verdicts, AI cache)
-- `src/lib/server/triage/` — rule resolution + seed, the rule-centric run loop, apply/undo
-- `src/routes/api/` — run · decisions · leftover · undo · actions · rules
-- `scripts/rules.ts` — text dump of current rules (`bun run rules <accountId>`)
+- `src/lib/server/v3/` — policy, representation, assessment, deterministic calendar rule, review service
+- `src/lib/v3/review.ts` — review sections, grouping, ranking, decision helpers
+- `src/lib/components/` — review rows, action controls, icons
+- `src/lib/server/gmail/` — OAuth, reauth, thread operations, action ledger and undo, content sanitization
+- `src/lib/server/db/` — active and historical schema; migrations remain in `drizzle/`
+- `src/routes/api/v3/` — run, review, conversation content, undo
+- `scripts/v3-*.ts` — fixtures, reports, private snapshot evaluation and replay

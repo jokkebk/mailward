@@ -1,19 +1,10 @@
 import { getGmailClient } from './client';
-import { ensureLabelExists } from './actions';
+import { ensureLabelExists } from './labels';
 
 /**
  * Thread-level action verbs. The design triages at the thread level, so these
  * operate on Gmail thread ids and have clean inverses for rollback.
  */
-
-export async function markThreadRead(accountId: string, threadId: string): Promise<void> {
-	const gmail = await getGmailClient(accountId);
-	await gmail.users.threads.modify({
-		userId: 'me',
-		id: threadId,
-		requestBody: { removeLabelIds: ['UNREAD'] }
-	});
-}
 
 export async function archiveThread(accountId: string, threadId: string): Promise<void> {
 	const gmail = await getGmailClient(accountId);

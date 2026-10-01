@@ -11,7 +11,7 @@ import { writeFileSync, readFileSync, realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { prepareThread } from '../src/lib/server/v3/representation';
 import { callJev, resolveHandling, RUBRIC_VERSION } from '../src/lib/server/v3/assessment';
-import { AUDIT_POLICY } from '../src/lib/server/v3/policy';
+import { AUDIT_POLICY } from './lib/v3-audit-policy';
 import type { Representation } from '../src/lib/types/v3';
 
 const [mode, dbPath, corpusPath, resultPath] = process.argv.slice(2);

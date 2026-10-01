@@ -1,31 +1,43 @@
-/** Read-only weekly packet for a capable policy-maintenance agent. */
+/** Read-only weekly packet; exact evidence on demand. Never calls Gmail or Jev. */
 import { Database } from 'bun:sqlite';
+import { weeklyPacket, learningCase } from '../src/lib/server/v3/learning';
 
+const args = process.argv.slice(2);
+const account = args.shift();
+let days = 7, limit = 30, caseId: string | undefined, json = false;
+while (args.length) {
+  const flag = args.shift();
+  if (flag === '--json') json = true;
+  else if (flag === '--days') days = Number(args.shift());
+  else if (flag === '--limit') limit = Number(args.shift());
+  else if (flag === '--case') { caseId = args.shift(); if (!caseId || caseId.startsWith('--')) throw new Error('--case requires an assessment ID'); }
+  else throw new Error(`Unknown option: ${flag}`);
+}
+if (!Number.isFinite(days) || days <= 0 || !Number.isInteger(limit) || limit < 0 || limit > 500) throw new Error('Use positive --days and --limit 0–500');
 const db = new Database(process.env.DATABASE_PATH || './data/emails.db', { readonly: true });
-const account = process.argv[2];
-if (!account) throw new Error('Usage: bun run v3-report <accountId>');
-const policy = db.query('SELECT id,version_no,rubric_version,status,created_by,import_report FROM v3_policies WHERE account_id = ? ORDER BY version_no DESC LIMIT 1').get(account) as any;
-console.log(`# Mailward v3 learning packet — ${account}`);
-if (!policy) { console.log('No v3 policy yet.'); db.close(); process.exit(0); }
-console.log(`Policy v${policy.version_no} (${policy.status}, ${policy.created_by}); rubric v${policy.rubric_version}; id ${policy.id}`);
-console.log(`Import report: ${policy.import_report ?? 'none'}`);
-const distribution = db.query(`SELECT a.lane, a.proposed_action, COUNT(*) n FROM v3_assessments a
-  WHERE a.account_id = ? GROUP BY a.lane,a.proposed_action ORDER BY n DESC`).all(account);
-console.log('\n## Assessment mix\n');
-for (const row of distribution as any[]) console.log(`- ${row.lane} / ${row.proposed_action}: ${row.n}`);
-console.log('\n## Review outcomes\n');
-for (const row of db.query(`SELECT r.kind,r.disposition,r.execution_status,COUNT(*) n FROM v3_reviews r
-  WHERE r.account_id = ? GROUP BY r.kind,r.disposition,r.execution_status ORDER BY n DESC`).all(account) as any[])
-  console.log(`- ${row.kind} → ${row.disposition}: ${row.n} (${row.execution_status})`);
-console.log('\n## Corrections and optional feedback\n');
-for (const row of db.query(`SELECT r.created_at,r.kind,r.disposition,r.final_disposition,r.chip,r.note,a.lane,a.proposed_action,a.reason
-  FROM v3_reviews r JOIN v3_assessments a ON r.assessment_id = a.id
-  WHERE r.account_id = ? AND (r.kind = 'correct' OR r.chip IS NOT NULL OR r.note IS NOT NULL)
-  ORDER BY r.created_at DESC LIMIT 100`).all(account) as any[])
-  console.log(`- ${new Date(row.created_at).toISOString()}: ${row.lane}/${row.proposed_action} → ${row.kind}/${row.disposition}${row.final_disposition ? ` then ${row.final_disposition}` : ''}; ${row.chip ?? ''}; ${row.note ?? ''}; reason ${row.reason}`);
-console.log('\n## Usage\n');
-for (const row of db.query(`SELECT model,COUNT(*) calls,SUM(thread_count) threads,SUM(input_tokens) input_tokens,SUM(duration_ms) duration_ms,status
-  FROM v3_call_logs WHERE account_id = ? GROUP BY model,status`).all(account) as any[])
-  console.log(`- ${row.model} ${row.status}: ${row.calls} calls, ${row.threads} threads, ${row.input_tokens ?? 'unknown'} input tokens, ${row.duration_ms} ms`);
-console.log('\nSkipped and done outcomes are reported separately; neither is a negative classifier example by default. Validate policy edits on held-out fixtures before replacing the current version.');
-db.close();
+try {
+  if (!account) {
+    console.log('Usage: bun run v3-report <accountId> [--days 7] [--limit 30] [--json] [--case assessmentId]');
+    console.log('Accounts:', (db.query('SELECT id FROM tokens ORDER BY id').all() as { id: string }[]).map((r) => r.id).join(', '));
+  } else if (caseId) console.log(JSON.stringify(learningCase(db,account,caseId), null, 2));
+  else {
+    const packet = weeklyPacket(db,account,Date.now() - days * 86400000,limit);
+    if (json) console.log(JSON.stringify(packet,null,2));
+    else {
+      console.log(`# Mailward v3 weekly review — ${account}\nSince ${packet.since}\n`);
+      console.log('## Current policy\n');
+      console.log(packet.currentPolicy ? `v${packet.currentPolicy.version_no}, id ${packet.currentPolicy.id}, rubric ${packet.currentPolicy.rubric_version}\n\n${packet.currentPolicy.text}` : 'No v3 policy yet.');
+      console.log('\n## Agreement by policy / rubric / model / source\n');
+      for (const c of packet.cohorts) {
+        console.log(`- Policy v${c.policyVersion} (${c.policyId}), rubric ${c.rubricVersion}, ${c.source === 'rule' ? `${c.rule} v${c.ruleVersion}` : `${c.model} / actual ${c.actualModel ?? 'unknown'}`}: ${c.matched}/${c.comparable} matched (${c.agreementPct ?? 'n/a'}%); ${c.reviewed} reviews, ${c.skipped} skipped, ${c.completed} done, ${c.unresolved} unresolved, ${c.undone} undone, ${c.failed} failed`);
+        console.log(`  ${JSON.stringify(c.matrix)}`);
+      }
+      console.log('\n## Policy lineage\n', JSON.stringify(packet.policyLineage,null,2));
+      console.log('\n## Assessment mix\n', JSON.stringify(packet.assessmentMix,null,2));
+      console.log('\n## Cases (corrections, notes, undos and failures first)\n', JSON.stringify(packet.cases,null,2));
+      console.log(`\n${packet.omittedCases} cases omitted; use --limit or --case for more evidence.`);
+      console.log('\n## Usage\n', JSON.stringify(packet.usage,null,2));
+      console.log(`\n${packet.interpretation}`);
+    }
+  }
+} finally { db.close(); }

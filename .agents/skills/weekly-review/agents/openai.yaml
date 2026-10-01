@@ -1,0 +1,4 @@
+interface:
+  display_name: "Mailward v3 weekly review"
+  short_description: "Review Jev feedback and refine the v3 policy"
+  default_prompt: "Use $weekly-review to review recent Mailward v3 decisions and propose grounded policy improvements."
