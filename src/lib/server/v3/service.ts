@@ -3,7 +3,7 @@ import { createHash } from 'crypto';
 import { mkdirSync } from 'fs';
 import { dirname } from 'path';
 import { getGmailClient } from '../gmail/client';
-import { handleReauthCleanup } from '../gmail/reauth';
+import { isReauthRequired } from '../gmail/reauth';
 import { extractBody } from '../gmail/content';
 import { sanitizeHtml } from '../gmail/sanitize';
 import { applyThreadAction, undoAction } from '../gmail/execution';
@@ -178,7 +178,7 @@ async function assessAccount(accountId: string, runId: string, limit: number) {
     recordStage(sqlite, accountId, runId, 'v3_assess', assessStarted, 'completed', fresh.length);
     sqlite.query("UPDATE runs SET status = 'completed', ended_at = ? WHERE id = ?").run(Date.now(), runId);
   } catch (error) {
-    const reauth = await handleReauthCleanup(error, accountId);
+    const reauth = isReauthRequired(error);
     sqlite.query("UPDATE runs SET status = ?, ended_at = ? WHERE id = ?").run(reauth ? 'reauth_required' : 'failed', Date.now(), runId);
     console.error('v3 run failed:', error);
   } finally { sqlite.close(); }
