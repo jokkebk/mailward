@@ -2,6 +2,7 @@
 	"name": "mailward",
 	"version": "3.0.0",
 	"description": "Review-first triage for unread Gmail",
+	"license": "MIT",
 	"private": true,
 	"type": "module",
 	"scripts": {

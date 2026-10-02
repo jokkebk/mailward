@@ -116,3 +116,7 @@ can also review your feedback and suggest guidance changes. See
 ## Contributing
 
 [AGENTS.md](AGENTS.md) is the developer guide for people and coding agents.
+
+## License
+
+[MIT](LICENSE)
