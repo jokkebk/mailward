@@ -59,6 +59,9 @@ add some credit, and set it as `OPENROUTER_API_KEY`.
 Open the app, connect your account, and finish the short setup: your name and role,
 starter guidance and suggested recipes. Then choose **Check for new mail**.
 
+Deadlines and event times are judged in the system time zone. To use another
+zone, set `MAILWARD_TIME_ZONE` (for example `America/New_York`).
+
 ## Cost
 
 Jev bills input tokens only, at **$0.042 per million**. That was the listed
@@ -108,7 +111,6 @@ can also review your feedback and suggest guidance changes. See
 ## Limitations
 
 - Supports Gmail only, for one user on localhost.
-- Compares deadlines in `Europe/Helsinki` time.
 - Applies nothing automatically.
 
 ## Contributing

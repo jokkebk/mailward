@@ -3,7 +3,7 @@ import { Database } from 'bun:sqlite';
 import { drizzle } from 'drizzle-orm/bun-sqlite';
 import { migrate } from 'drizzle-orm/bun-sqlite/migrator';
 import { prepareMessage, prepareThread, representationHasGap, calendarEndTime } from '../src/lib/server/v3/representation';
-import { buildAssessmentRequest, parseAssessment, resolveHandling } from '../src/lib/server/v3/assessment';
+import { buildAssessmentRequest, parseAssessment, resolveHandling, resolveTimeZone, TIME_ZONE } from '../src/lib/server/v3/assessment';
 import { getOrCreatePolicy, createPolicyRevision, STARTER_POLICY } from '../src/lib/server/v3/policy';
 import { recipeHandling, recipeMatches, RECIPE_LIBRARY } from '../src/lib/server/v3/recipes';
 import { sanitizeHtml } from '../src/lib/server/gmail/sanitize';
@@ -29,6 +29,16 @@ describe('v3 content and handling', () => {
     expect(rep.omittedUnread).toBe(1);
     expect(representationHasGap(rep)).toBe(true);
   });
+  test('judges time in the configured zone, falling back to the system zone', () => {
+    const system = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    expect(resolveTimeZone(undefined)).toBe(system);
+    expect(resolveTimeZone(' America/New_York ')).toBe('America/New_York');
+    expect(resolveTimeZone('Not/AZone')).toBe(system);
+    const request = buildAssessmentRequest([prepareThread('t', ['m'], new Map([['m', message('m', 'Due tomorrow')]]))], 'policy');
+    expect(request.state.timeZone).toBe(TIME_ZONE);
+    expect(JSON.stringify(request.questions)).toContain(`deadlines in ${TIME_ZONE}.`);
+  });
+
   test('bounds body from both ends and omits executable markup and unsafe links', () => {
     const html = `<a href="javascript:alert(1)">bad</a><a href="https://example.test/pay?a=1&amp;b=2">Pay receipt</a><img src="https://tracker.test/pixel"><p>Start ${'middle '.repeat(900)} End</p>`;
     const item = prepareMessage(message('m', html, 'text/html'), 300);

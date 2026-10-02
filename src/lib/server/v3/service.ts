@@ -11,7 +11,7 @@ import { saveRuleAssessment } from './deterministic';
 import { getOrCreatePolicy, getPolicy } from './policy';
 import { firstMatch, listRecipes } from './recipes';
 import { ensureAccountSetup } from './settings';
-import { callJev, resolveHandling, RUBRIC_VERSION, V3_MODEL } from './assessment';
+import { callJev, resolveHandling, RUBRIC_VERSION, TIME_ZONE, V3_MODEL } from './assessment';
 import { prepareThread, REPRESENTATION_VERSION } from './representation';
 import type { Assessment, Representation, ReviewDecision } from '$lib/types/v3';
 
@@ -27,7 +27,7 @@ function cacheContext(rep: Representation): string | null {
   const text = rep.messages.map((m) => `${m.subject} ${m.body}`).join(' ');
   if (rep.messages.some((m) => m.isCalendarInvite)) return JSON.stringify({ day: new Date().toISOString().slice(0, 10), ended: rep.messages.map((m) => m.calendar?.endsAt ? Date.parse(m.calendar.endsAt) <= Date.now() : null) });
   if (!/\b(today|tomorrow|deadline|due|by (?:mon|tues|wednes|thurs|fri|satur|sun)day|tänään|huomenna|mennessä|erääntyy)\b/i.test(text)) return null;
-  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Helsinki', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  return new Intl.DateTimeFormat('en-CA', { timeZone: TIME_ZONE, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
 }
 
 export interface AssessmentRow {
