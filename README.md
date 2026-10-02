@@ -1,120 +1,116 @@
-# Mailward 3.0
+# Mailward
 
-An email triage agent for unread Gmail. V3 assesses each thread once and lays
-the results out on one review page. You decide what to do; Gmail changes are
-logged and reversible.
+Review-first triage for unread Gmail. Mailward reads each unread thread once,
+proposes what to do with it, and puts every thread on one review page. You confirm
+or change each proposal. Gmail changes only when you press **Apply**, and every
+action can be undone.
 
-See [DESIGN.md](DESIGN.md) for the current architecture and
-[CONTEXT.md](CONTEXT.md) for domain language. V2 is retired to Git history;
-the `v2` tag preserves the rule-centric baseline.
+![Reviewing a demo inbox: accept proposals with the keyboard, decide the unclear ones, clear whole sections, then apply](docs/demo.png)
 
-## Workflow
+- **Six sections on one page:** Needs action, Worth checking out, Needs a decision,
+  Show before clearing, Archive and Trash.
+- **Guidance you write.** Short guidance cards tell the model what matters to
+  you. Each row can show exactly what the model saw.
+- **Recipes handle the obvious mail.** Filters for receipts, calendar replies and sign-in
+  codes skip the model. You still review what they propose.
+- **Reversible changes.** Trash is Gmail trash, never permanent deletion. Archive marks
+  the thread read. TODO adds a label and keeps it unread.
 
-Open `/`, select your Gmail account, and choose **Check unread mail**. V3 fetches full
-unread message content for new snapshots, prepares a bounded plain-text record,
-and asks Jev six typed questions per thread: category, attention,
-retention, urgency, relevance, and evidence gap. A compact versioned policy is
-included once per request. Each request assesses one thread; up to four requests
-run concurrently. Missing or malformed
-evidence stays unresolved. Existing snapshots are reused when the message,
-policy, rubric, model, and relevant date context match.
+Assessment uses [Jev](https://openrouter.ai/docs/guides/community/jev), TypeSafe's
+decision model on OpenRouter. Jev returns typed answers with probabilities.
+You provide your own OpenRouter key.
 
-The review page lists **Needs action**, **Worth checking out**, **Needs a
-decision**, **Show before clearing**, **Archive** and **Trash**, then what was
-applied. Rows sort by urgency (relevance for worthwhile reading) and carry a 0–3
-importance signal; Archive and Trash are grouped by Jev's category. Each row's
-toggle shows TODO, Archive, Trash, Leave and Done at once: a ring marks Jev's
-proposal, a dashed ring its unconfirmed leaning on undecided rows, and a fill your
-choice. Section buttons accept every remaining proposal at once. Done asks what
-to do afterwards. Feedback chips and notes are optional. Keyboard: `j`/`k` move,
-`y` accepts the suggestion, `t` `e` `#` `l` `d` choose, `o` opens, `?` lists keys.
-**Apply** is the only Gmail mutation step; unapplied decisions survive a reload.
-Choosing Trash on a visible show-before-clearing row records that you saw it.
-Rows offer the exact representation Jev saw and an on-demand sanitized view of
-the full conversation. Individual applied actions can be undone. V3 imports no
-automation trust from legacy rules, and a new policy revision stays review-first.
+## Try the demo
 
-V3 currently has no auto-apply or policy-promotion workflow. Explicit larger
-representations, richer calibration studies, and CLI/MCP adapters remain
-follow-up work.
-
-## Setup
-
-Requires [Bun](https://bun.sh).
+You need [Bun](https://bun.sh). You don't need a Google or OpenRouter account.
 
 ```bash
 bun install
-cp .env.example .env   # then fill in (see below)
+bun run demo
+```
+
+The demo opens at http://localhost:4873 with a sample inbox. You can review and
+open rows and edit settings. The demo has no Gmail connection, so **Apply** and
+**Check for new mail** won't work.
+
+## Set up with your Gmail
+
+```bash
+bun install
+cp .env.example .env   # fill in the values below
 bun run dev            # http://localhost:4873
 ```
 
-### Google OAuth
+**Google OAuth**
 
-1. Create a project at [console.cloud.google.com](https://console.cloud.google.com), enable the Gmail API.
-2. Configure the OAuth consent screen. If audience is **External** / status **Testing**,
-   add your account under **Test users**. (Testing-status apps expire the refresh token
-   ~weekly — Mailward detects this and shows a **Reauthorize** button.)
-3. Create OAuth 2.0 **Web application** credentials.
-4. Add redirect URI `http://localhost:4873/auth/callback`.
-5. Put the Client ID / Secret in `.env`.
+1. Create a project at [console.cloud.google.com](https://console.cloud.google.com)
+   and enable the **Gmail API**.
+2. Configure the OAuth consent screen. While the app is in **Testing** status,
+   add your own address under **Test users**. Google expires refresh tokens for
+   testing apps after about a week. When that happens, Mailward shows a
+   **Reauthorize** button.
+3. Create **Web application** credentials with the redirect URI
+   `http://localhost:4873/auth/callback`.
+4. Copy the client ID and secret to `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`.
 
-You can reuse the same Google project as mailnick — just add the `:4873` redirect URI.
+**OpenRouter.** Create a key at [openrouter.ai/keys](https://openrouter.ai/keys),
+add some credit, and set it as `OPENROUTER_API_KEY`.
 
-Set `OPENROUTER_API_KEY` in `.env` to assess mail with Jev through OpenRouter.
-It is the only assessment provider used by the app.
+Open the app, connect your account, and finish the short setup: your name and role,
+starter guidance and suggested recipes. Then choose **Check for new mail**.
 
-## Fixture preview and verification
+## Cost
 
-```bash
-bun run scripts/v3-fixture.ts /tmp/mailward-v3-fixture.db
-DATABASE_PATH=/tmp/mailward-v3-fixture.db GOOGLE_CLIENT_ID=fixture GOOGLE_CLIENT_SECRET=fixture GOOGLE_REDIRECT_URI=http://localhost:4873/auth/callback bun run dev
-```
+Jev bills input tokens only, at **$0.042 per million**. That was the listed
+price in September 2026; the
+[model page](https://openrouter.ai/typesafe/jev-1.13) has the current rate.
+A typical thread uses about 5,000 tokens.
 
-The fixture supports reviewing the UI without usable Gmail credentials. Do not
-apply fixture decisions or check new mail. Never test against the live database.
-Run `bun test` and `bun run check`; use the same fixture environment for
-`bun run build`, since the build initializes the server.
+| | Approximate cost |
+|---|---|
+| One thread | $0.0002 |
+| A check of 100 unread threads | $0.02 |
+| A daily 100-thread check for a month | $0.60 |
 
-## Weekly policy review
+Recipe matches cost nothing, and so do threads that were already assessed and haven't changed.
 
-Invoke `$weekly-review` in this repository, or ask for a weekly v3 review. The
-[skill](.agents/skills/weekly-review/SKILL.md) reads feedback, investigates cases,
-and proposes compact policy changes for approval. It is also available to Claude
-through the repository's `.claude/skills/weekly-review/` entry.
+## Privacy
 
-```bash
-bun run v3-report <accountId> --days 7
-bun run v3-report <accountId> --days 30 --json
-bun run v3-report <accountId> --case <assessmentId>
-```
+All state, including your Google tokens, stays in one local SQLite file
+(`./data/emails.db`). For each unread thread that no recipe handles, Mailward
+sends OpenRouter the headers, clipped body text, links and calendar details,
+together with your guidance. Mailward has no login of its own, so run it only
+on localhost.
 
-Reports separate agreement by policy, rubric, model and source. Done, Leave and
-unresolved decisions do not count as classifier corrections; undo and execution
-failures are separate signals. Exact stored email evidence is available on demand.
-The report is read-only and makes no Gmail or Jev calls.
+## Daily use
 
-`bun run v3-policy data/proposal.json` previews a replacement; adding `--apply`
-appends the approved policy revision and rejects stale proposals. Keep private
-proposals and evaluation corpora outside Git. Validate revisions on held-out cases;
-reviewed-choice agreement is not an inbox-wide accuracy measure.
+1. **Check for new mail.** Mailward scans unread inbox threads from the last 30 days.
+2. **Review.** A ring marks the proposal and a filled button marks your choice.
+   A dashed ring marks a tentative suggestion on a row Jev couldn't decide.
+   Section buttons accept all remaining proposals in that section.
+   **Done** means you've handled the thread, and asks what should happen to it next.
+3. **Apply.** Apply is the only step that changes Gmail. Choices you haven't
+   applied survive a reload, and you can undo each applied action.
 
-Existing accounts reuse their stored v3 policies. New accounts receive a generic
-starter policy; normal app startup and runs never consult v2 rules or verdicts.
-See [DESIGN.md](DESIGN.md) for the historical snapshot evaluation/replay tools.
+| Key | Action |
+|---|---|
+| `j` / `k` | Next / previous row |
+| `y` | Accept the proposal |
+| `t` `e` `#` `l` `d` | TODO, Archive, Trash, Leave, Done |
+| `o` | Open the row |
+| `?` | All shortcuts |
 
-## Tech stack
+To improve proposals, edit your guidance and recipes on **Settings**. Edits to
+guidance are versioned, and you can restore an earlier version. A coding agent
+can also review your feedback and suggest guidance changes. See
+[AGENTS.md](AGENTS.md).
 
-- **Runtime**: Bun · **Framework**: SvelteKit (Svelte 5 runes)
-- **DB**: SQLite (`bun:sqlite`) + Drizzle ORM — one file, the whole system state
-- **Gmail**: `googleapis` (thread-level actions)
+## Limitations
 
-## Layout
+- Supports Gmail only, for one user on localhost.
+- Compares deadlines in `Europe/Helsinki` time.
+- Applies nothing automatically.
 
-- `src/lib/server/v3/` — policy (guidance cards), representation, assessment, recipes, settings, review service
-- `src/lib/server/v3/recipes/` — the shipped recipe catalogue (JSON)
-- `src/lib/v3/review.ts` — review sections, grouping, ranking, decision helpers
-- `src/lib/components/` — review rows, action controls, icons; `settings/` for the settings page
-- `src/lib/server/gmail/` — OAuth, reauth, thread operations, action ledger and undo, content sanitization
-- `src/lib/server/db/` — active and historical schema; migrations remain in `drizzle/`
-- `src/routes/api/v3/` — run, review, conversation content, undo, settings
-- `scripts/v3-*.ts` — fixtures, reports, private snapshot evaluation and replay
+## Contributing
+
+[AGENTS.md](AGENTS.md) is the developer guide for people and coding agents.
