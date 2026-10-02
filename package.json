@@ -1,10 +1,12 @@
 {
 	"name": "mailward",
 	"version": "3.0.0",
+	"description": "Review-first triage for unread Gmail",
 	"private": true,
 	"type": "module",
 	"scripts": {
 		"dev": "bash scripts/dev-with-title.sh",
+		"demo": "rm -f /tmp/mailward-demo.db && bun run scripts/v3-fixture.ts /tmp/mailward-demo.db && DATABASE_PATH=/tmp/mailward-demo.db GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-demo} GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-demo} GOOGLE_REDIRECT_URI=${GOOGLE_REDIRECT_URI:-http://localhost:4873/auth/callback} bash scripts/dev-with-title.sh",
 		"build": "bunx --bun vite build",
 		"preview": "vite preview",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
