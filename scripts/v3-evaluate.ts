@@ -3,7 +3,8 @@
  * replay: no Gmail access; Jev evaluates the captured mail at the original run time.
  * Output contains private mail. Keep corpus/results outside Git.
  * bun run scripts/v3-evaluate.ts capture /tmp/snapshot.db /tmp/corpus.json
- * bun run scripts/v3-evaluate.ts replay /tmp/snapshot.db /tmp/corpus.json /tmp/results.json
+ * bun run scripts/v3-evaluate.ts replay /tmp/snapshot.db /tmp/corpus.json /tmp/results.json [policy.txt]
+ * Replay uses policy.txt as the candidate policy, else the account's latest stored policy.
  */
 import { Database } from 'bun:sqlite';
 import { google } from 'googleapis';
@@ -11,7 +12,6 @@ import { writeFileSync, readFileSync, realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { prepareThread } from '../src/lib/server/v3/representation';
 import { callJev, resolveHandling, RUBRIC_VERSION } from '../src/lib/server/v3/assessment';
-import { AUDIT_POLICY } from './lib/v3-audit-policy';
 import type { Representation } from '../src/lib/types/v3';
 
 const [mode, dbPath, corpusPath, resultPath] = process.argv.slice(2);
@@ -22,6 +22,9 @@ const db = new Database(dbPath, { readonly: true });
 const run = db.query("SELECT * FROM runs WHERE scope='v3' AND status='completed' ORDER BY started_at DESC LIMIT 1").get() as any;
 if (!run) throw new Error('No completed v3 run');
 const original = db.query('SELECT a.* FROM v3_assessments a JOIN v3_run_items i ON i.assessment_id=a.id WHERE i.run_id=? ORDER BY a.created_at,a.id').all(run.id) as any[];
+const policyPath = process.argv[6];
+let policyText: string | undefined;
+const candidatePolicy = () => policyText ??= policyPath ? readFileSync(policyPath, 'utf8') : (db.query('SELECT text FROM v3_policies WHERE account_id=? ORDER BY version_no DESC LIMIT 1').get(run.account_id) as { text: string }).text;
 const save = (path: string, value: unknown) => writeFileSync(path, JSON.stringify(value, null, 2), { mode: 0o600 });
 if (mode === 'capture') {
   const token = db.query('SELECT access_token,refresh_token,expires_at FROM tokens WHERE id=?').get(run.account_id) as any;
@@ -46,9 +49,9 @@ if (mode === 'capture') {
   });
   const batches = rows.map((row) => [row]);
   const calls:any[]=[];let next=0;
-  await Promise.all(Array.from({length:3},async()=>{while(next<batches.length){const index=next++;const batch=batches[index];const result=await callJev(batch.map(r=>r.rep),AUDIT_POLICY,fetch,corpus.assessmentTime);batch.forEach((row,i)=>{const a=result.assessments[i];if(a instanceof Error)throw a;row.candidate={...resolveHandling(a,row.rep),answers:a};});calls.push({batch:index,model:result.model,usage:result.usage,durationMs:result.durationMs,promptChars:result.promptChars});console.log(`Evaluated batch ${index+1}/${batches.length}`);}}));
+  await Promise.all(Array.from({length:3},async()=>{while(next<batches.length){const index=next++;const batch=batches[index];const result=await callJev(batch.map(r=>r.rep),candidatePolicy(),fetch,corpus.assessmentTime);batch.forEach((row,i)=>{const a=result.assessments[i];if(a instanceof Error)throw a;row.candidate={...resolveHandling(a,row.rep),answers:a};});calls.push({batch:index,model:result.model,usage:result.usage,durationMs:result.durationMs,promptChars:result.promptChars});console.log(`Evaluated batch ${index+1}/${batches.length}`);}}));
   const count=(field:'original'|'candidate')=>Object.fromEntries(['needs_action','worth_reading','show_me','decision','cleanup'].map(lane=>[lane,rows.filter(r=>r[field].lane===lane).length]));
   const summary={runId:run.id,rubricVersion:RUBRIC_VERSION,threads:rows.length,original:count('original'),candidate:count('candidate'),baselineAgreement:rows.filter(r=>r.baseline?.action===r.candidate.action).length,originalAgreement:rows.filter(r=>r.baseline?.action===r.original.action).length,calls:calls.length,inputTokens:calls.reduce((n,c)=>n+(c.usage.input_tokens??0),0),costUsd:calls.reduce((n,c)=>n+(c.usage.cost??0),0)};
-  save(resultPath,{summary,policy:AUDIT_POLICY,assessmentTime:corpus.assessmentTime,calls,rows});console.log(JSON.stringify(summary,null,2));
+  save(resultPath,{summary,policy:candidatePolicy(),assessmentTime:corpus.assessmentTime,calls,rows});console.log(JSON.stringify(summary,null,2));
 }
 db.close();

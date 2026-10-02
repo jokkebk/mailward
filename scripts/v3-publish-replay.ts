@@ -6,14 +6,13 @@ import { Database } from 'bun:sqlite';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { getOrCreatePolicy, createPolicyRevision } from '../src/lib/server/v3/policy';
-import { AUDIT_POLICY } from './lib/v3-audit-policy';
 import { resolveHandling, RUBRIC_VERSION, V3_MODEL, parseAssessment } from '../src/lib/server/v3/assessment';
 import { REPRESENTATION_VERSION } from '../src/lib/server/v3/representation';
 
 const [dbPath, resultPath] = process.argv.slice(2);
 if (!dbPath || !resultPath) throw new Error('Usage: v3-publish-replay.ts database.db evaluated-results.json');
 const result = JSON.parse(readFileSync(resultPath, 'utf8'));
-if (result.policy !== AUDIT_POLICY || result.summary.rubricVersion !== RUBRIC_VERSION) throw new Error('Evaluation must use the current policy and rubric');
+if (typeof result.policy !== 'string' || !result.policy.trim() || result.summary.rubricVersion !== RUBRIC_VERSION) throw new Error('Evaluation must record its policy and use the current rubric');
 const db = new Database(dbPath); db.exec('PRAGMA foreign_keys=ON');
 try {
   const source = db.query("SELECT * FROM runs WHERE id=? AND scope='v3' AND status='completed'").get(result.summary.runId) as any;
@@ -26,7 +25,7 @@ try {
   const active = db.query("SELECT id FROM runs WHERE account_id=? AND status='running' AND CASE WHEN started_at>100000000000 THEN started_at ELSE started_at*1000 END > ? LIMIT 1").get(source.account_id, Date.now()-1800000);
   if(active) throw new Error('An inbox assessment is active');
   const currentPolicy = getOrCreatePolicy(db, source.account_id);
-  if (currentPolicy.id !== prior[0].policy_id && currentPolicy.text !== AUDIT_POLICY) throw new Error('Preferences changed since the evaluated run');
+  if (currentPolicy.id !== prior[0].policy_id && currentPolicy.text !== result.policy) throw new Error('Preferences changed since the evaluated run');
   for (const row of result.rows) {
     const old = prior.find((a)=>a.thread_id===row.threadId);
     const live = db.query('SELECT message_ids FROM threads WHERE id=? AND account_id=?').get(row.threadId,source.account_id) as any;
@@ -36,7 +35,7 @@ try {
   }
   const runId=crypto.randomUUID(), now=Date.now();
   db.transaction(()=>{
-    const policy=currentPolicy.text===AUDIT_POLICY ? currentPolicy : createPolicyRevision(db,source.account_id,AUDIT_POLICY,'quality-audit','Correct ownership exceptions, reminder handling and calendar semantics; evaluated on the original 49-thread inbox snapshot. Review-only.');
+    const policy=currentPolicy.text===result.policy ? currentPolicy : createPolicyRevision(db,source.account_id,result.policy,'replay','Policy evaluated on a replayed inbox snapshot. Review-only.');
     db.query("INSERT INTO runs(id,account_id,started_at,ended_at,scope,status) VALUES(?,?,?,?,'v3','completed')").run(runId,source.account_id,now,now);
     for(const row of result.rows){
       const handling=resolveHandling(row.candidate.answers,row.rep), id=crypto.randomUUID();

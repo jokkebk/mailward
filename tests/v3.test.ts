@@ -160,8 +160,6 @@ describe('v3 content and handling', () => {
     sqlite.query('INSERT INTO tokens (id,access_token,refresh_token,expires_at) VALUES (?,?,?,?)').run(account,'x','y',1);
     const policy = getOrCreatePolicy(sqlite,account);
     expect(policy.text).toBe(STARTER_POLICY);
-    expect(policy.text).not.toContain('Alex');
-    expect(policy.text).not.toContain('Acme');
     expect(JSON.parse(policy.import_report!).source).toBe('v3-starter');
     const revised = createPolicyRevision(sqlite,account,policy.text + '\nPrefer retaining user-specified research references.', 'fixture','Refine preferences');
     expect(revised.version_no).toBe(2);

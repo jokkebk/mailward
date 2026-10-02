@@ -33,9 +33,8 @@ messages and documents fall through to Jev.
 Jev answers six typed questions: category, attention, retention, urgency,
 relevance, and evidence gap. Each request assesses one thread with all six
 questions and the compact policy; up to four requests run concurrently. Thread
-isolation avoids the cross-thread interference observed in the September audit.
-See [the quality audit](docs/v3-quality-audit-2026-09-30.md) for its evidence and
-limitations.
+isolation avoids cross-thread interference: in batched calls, one thread's
+evidence was seen to shift another thread's answers.
 
 Assessments preserve distributions and the exact representation. Cache identity
 includes input, policy, rubric, model, and relevant date context. Representation
