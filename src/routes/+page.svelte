@@ -143,30 +143,27 @@
         body: JSON.stringify({ runId: data.run.id, decisions: pending })
       });
       const result = await response.json();
-      if (response.status === 409 && result.stale?.length) {
-        // Keep the other decisions; only the changed threads need a fresh look.
-        const stale = new Set<string>(result.stale);
-        const subjects = [...stale].map((id) => liveById.get(id)?.representation.messages[0]?.subject || '(no subject)');
-        drafts = Object.fromEntries(Object.entries(drafts).filter(([id]) => !stale.has(id)));
-        notice = { text: `Gmail was not changed. Dropped ${stale.size} decision${stale.size === 1 ? '' : 's'} on changed thread${stale.size === 1 ? '' : 's'}: ${subjects.join('; ')}. Apply again for the other ${pending.length}, then check for new mail.`, tone: 'error' };
-        return;
-      }
       if (!response.ok) throw new Error(result.error || 'Gmail was not changed: the review could not be applied.');
       const outcomes = result.results as { assessmentId: string; status: string }[];
       const byId = new Map(pending.map((d) => [d.assessmentId, d]));
       const counts = new Map<string, number>();
       let failed = 0;
+      const stale: string[] = [];
       for (const o of outcomes) {
         if (o.status === 'failed') { failed++; continue; }
+        if (o.status === 'stale') { stale.push(liveById.get(o.assessmentId)?.representation.messages[0]?.subject || '(no subject)'); continue; }
         const d = byId.get(o.assessmentId);
         const target = d?.kind === 'done' ? d.finalDisposition ?? 'leave' : d?.disposition ?? 'leave';
         counts.set(target, (counts.get(target) ?? 0) + 1);
       }
       const parts = [...counts].map(([target, n]) => `${n} ${APPLIED_LABEL[target as keyof typeof APPLIED_LABEL].toLowerCase()}`);
       drafts = {};
+      const applied = parts.join(', ') || 'nothing';
+      // Changed threads keep their rows, undecided, until the next check reassesses them.
+      const staleText = stale.length ? ` Not applied, ${stale.length} thread${stale.length === 1 ? '' : 's'} got new mail (check for new mail to reassess): ${stale.join('; ')}.` : '';
       notice = failed
-        ? { text: `Applied with ${failed} failure${failed === 1 ? '' : 's'}: ${parts.join(', ') || 'nothing else changed'}. See Applied in this review.`, tone: 'error' }
-        : { text: `Applied: ${parts.join(', ')}.`, tone: 'success' };
+        ? { text: `Applied with ${failed} failure${failed === 1 ? '' : 's'}: ${applied}. See Applied in this review.${staleText}`, tone: 'error' }
+        : { text: `Applied: ${applied}.${staleText}`, tone: stale.length ? 'error' : 'success' };
       await refresh();
     } catch (error) { notice = { text: error instanceof Error ? error.message : String(error), tone: 'error' }; }
     finally { busy = false; }

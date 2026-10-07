@@ -193,7 +193,7 @@ function insertAssessment(sqlite: Database, accountId: string, runId: string, po
   sqlite.query('INSERT OR IGNORE INTO v3_run_items (run_id, assessment_id) VALUES (?, ?)').run(runId, id);
 }
 
-export class ReviewError extends Error { constructor(message: string, public statusCode = 400, public stale?: string[]) { super(message); } }
+export class ReviewError extends Error { constructor(message: string, public statusCode = 400) { super(message); } }
 
 export async function submitReviewedSet(accountId: string, runId: string, decisions: ReviewDecision[], actor = 'human') {
   if (!decisions.length) throw new ReviewError('No decisions submitted');
@@ -222,20 +222,23 @@ export async function submitReviewedSet(accountId: string, runId: string, decisi
     });
     // Verify the stored and live Gmail snapshots before any mutation. Another
     // inbound unread message must never inherit a decision made against the older
-    // message set. Every stale decision is named so the rest can be resubmitted.
+    // message set, so stale decisions are reported unapplied and the rest proceed.
     const gmail = await getGmailClient(accountId);
-    const stale: string[] = [];
+    const out: { assessmentId: string; status: string; actionId?: string; error?: string }[] = [];
+    const fresh = [];
     for (const { d, row } of rows) {
       const expected = JSON.stringify(parse<Representation>(row.representation).messageIds);
       const current = sqlite.query('SELECT message_ids FROM threads WHERE id = ? AND account_id = ?').get(row.thread_id, accountId) as { message_ids: string } | null;
-      if (!current || expected !== current.message_ids) { stale.push(d.assessmentId); continue; }
-      const live = await gmail.users.threads.get({ userId: 'me', id: row.thread_id, format: 'minimal' });
-      const liveUnread = (live.data.messages ?? []).filter((m) => m.labelIds?.includes('UNREAD') && m.labelIds?.includes('INBOX')).map((m) => m.id).filter(Boolean).reverse();
-      if (JSON.stringify(liveUnread.slice(0, 4)) !== expected) stale.push(d.assessmentId);
+      let changed = !current || expected !== current.message_ids;
+      if (!changed) {
+        const live = await gmail.users.threads.get({ userId: 'me', id: row.thread_id, format: 'minimal' });
+        const liveUnread = (live.data.messages ?? []).filter((m) => m.labelIds?.includes('UNREAD') && m.labelIds?.includes('INBOX')).map((m) => m.id).filter(Boolean).reverse();
+        changed = JSON.stringify(liveUnread.slice(0, 4)) !== expected;
+      }
+      if (changed) out.push({ assessmentId: d.assessmentId, status: 'stale' });
+      else fresh.push({ d, row });
     }
-    if (stale.length) throw new ReviewError(`${stale.length} thread${stale.length === 1 ? '' : 's'} changed since assessment; assess again`, 409, stale);
-    const out = [];
-    for (const { d, row } of rows) {
+    for (const { d, row } of fresh) {
       const target = d.kind === 'done' ? d.finalDisposition! : d.disposition;
       const reviewId = crypto.randomUUID();
       sqlite.query(`INSERT INTO v3_reviews (id,account_id,assessment_id,run_id,actor,kind,disposition,final_disposition,acknowledged,chip,note,execution_status,created_at)

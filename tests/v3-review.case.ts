@@ -92,12 +92,13 @@ describe('v3 reviewed set', () => {
       expect(fullFetches).toBe(1);
     } finally { globalThis.fetch = originalFetch; delete process.env.OPENROUTER_API_KEY; }
   });
-  test('rejects stale and duplicate decisions before Gmail mutation', async () => {
+  test('leaves stale decisions unapplied and rejects duplicates', async () => {
     liveIds = ['m1','m2'];
-    await expect(submitReviewedSet('a','r',[
-      { assessmentId:'a1', kind:'approve', disposition:'archive' }, { assessmentId:'a2', kind:'skip', disposition:'leave' }
-    ])).rejects.toMatchObject({ statusCode: 409, stale: ['a1','a2'] });
+    expect(await submitReviewedSet('a','r',[{ assessmentId:'a1', kind:'approve', disposition:'archive' }])).toEqual([{ assessmentId:'a1', status:'stale' }]);
     expect(mutations).toHaveLength(0);
+    const sqlite = db();
+    expect(sqlite.query("SELECT id FROM v3_reviews WHERE assessment_id = 'a1'").get()).toBeNull();
+    sqlite.close();
     liveIds = ['m1'];
     await expect(submitReviewedSet('a','r',[
       { assessmentId:'a1', kind:'approve', disposition:'archive' }, { assessmentId:'a1', kind:'approve', disposition:'archive' }
