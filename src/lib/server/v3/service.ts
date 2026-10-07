@@ -193,7 +193,7 @@ function insertAssessment(sqlite: Database, accountId: string, runId: string, po
   sqlite.query('INSERT OR IGNORE INTO v3_run_items (run_id, assessment_id) VALUES (?, ?)').run(runId, id);
 }
 
-export class ReviewError extends Error { constructor(message: string, public statusCode = 400) { super(message); } }
+export class ReviewError extends Error { constructor(message: string, public statusCode = 400, public stale?: string[]) { super(message); } }
 
 export async function submitReviewedSet(accountId: string, runId: string, decisions: ReviewDecision[], actor = 'human') {
   if (!decisions.length) throw new ReviewError('No decisions submitted');
@@ -212,8 +212,6 @@ export async function submitReviewedSet(accountId: string, runId: string, decisi
       const row = sqlite.query(`SELECT a.* FROM v3_assessments a JOIN v3_run_items i ON i.assessment_id = a.id WHERE i.run_id = ? AND a.id = ? AND a.account_id = ?`).get(runId, d.assessmentId, accountId) as any;
       if (!row) throw new ReviewError('Assessment not in run', 404);
       if (sqlite.query('SELECT id FROM v3_reviews WHERE assessment_id = ?').get(d.assessmentId)) throw new ReviewError('Already reviewed', 409);
-      const current = sqlite.query('SELECT message_ids FROM threads WHERE id = ? AND account_id = ?').get(row.thread_id, accountId) as { message_ids: string } | null;
-      if (!current || JSON.stringify(parse<Representation>(row.representation).messageIds) !== current.message_ids) throw new ReviewError('Message snapshot changed; assess again', 409);
       if ((row.lane === 'show_me' || d.chip === 'show_before_clearing') && (d.disposition === 'trash' || d.finalDisposition === 'trash') && !d.acknowledged) throw new ReviewError('Acknowledge before clearing', 400);
       // Show-before-clearing proposes leaving the mail until seen, then its final
       // handling; carrying out that final handling is agreement, not a correction.
@@ -222,15 +220,20 @@ export async function submitReviewedSet(accountId: string, runId: string, decisi
       if (d.kind === 'skip' && d.disposition !== 'leave') throw new ReviewError('Skip leaves mail untouched');
       return { d, row };
     });
-    // Verify the live Gmail snapshot before any mutation. Another inbound unread
-    // message must never inherit a decision made against the older message set.
+    // Verify the stored and live Gmail snapshots before any mutation. Another
+    // inbound unread message must never inherit a decision made against the older
+    // message set. Every stale decision is named so the rest can be resubmitted.
     const gmail = await getGmailClient(accountId);
-    for (const { row } of rows) {
+    const stale: string[] = [];
+    for (const { d, row } of rows) {
+      const expected = JSON.stringify(parse<Representation>(row.representation).messageIds);
+      const current = sqlite.query('SELECT message_ids FROM threads WHERE id = ? AND account_id = ?').get(row.thread_id, accountId) as { message_ids: string } | null;
+      if (!current || expected !== current.message_ids) { stale.push(d.assessmentId); continue; }
       const live = await gmail.users.threads.get({ userId: 'me', id: row.thread_id, format: 'minimal' });
       const liveUnread = (live.data.messages ?? []).filter((m) => m.labelIds?.includes('UNREAD') && m.labelIds?.includes('INBOX')).map((m) => m.id).filter(Boolean).reverse();
-      const expected = parse<Representation>(row.representation).messageIds;
-      if (JSON.stringify(liveUnread.slice(0, 4)) !== JSON.stringify(expected)) throw new ReviewError('New or changed unread message; assess again', 409);
+      if (JSON.stringify(liveUnread.slice(0, 4)) !== expected) stale.push(d.assessmentId);
     }
+    if (stale.length) throw new ReviewError(`${stale.length} thread${stale.length === 1 ? '' : 's'} changed since assessment; assess again`, 409, stale);
     const out = [];
     for (const { d, row } of rows) {
       const target = d.kind === 'done' ? d.finalDisposition! : d.disposition;

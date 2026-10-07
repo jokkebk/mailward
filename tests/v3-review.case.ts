@@ -94,7 +94,9 @@ describe('v3 reviewed set', () => {
   });
   test('rejects stale and duplicate decisions before Gmail mutation', async () => {
     liveIds = ['m1','m2'];
-    await expect(submitReviewedSet('a','r',[{ assessmentId:'a1', kind:'approve', disposition:'archive' }])).rejects.toBeInstanceOf(ReviewError);
+    await expect(submitReviewedSet('a','r',[
+      { assessmentId:'a1', kind:'approve', disposition:'archive' }, { assessmentId:'a2', kind:'skip', disposition:'leave' }
+    ])).rejects.toMatchObject({ statusCode: 409, stale: ['a1','a2'] });
     expect(mutations).toHaveLength(0);
     liveIds = ['m1'];
     await expect(submitReviewedSet('a','r',[

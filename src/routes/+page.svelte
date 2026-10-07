@@ -143,6 +143,14 @@
         body: JSON.stringify({ runId: data.run.id, decisions: pending })
       });
       const result = await response.json();
+      if (response.status === 409 && result.stale?.length) {
+        // Keep the other decisions; only the changed threads need a fresh look.
+        const stale = new Set<string>(result.stale);
+        const subjects = [...stale].map((id) => liveById.get(id)?.representation.messages[0]?.subject || '(no subject)');
+        drafts = Object.fromEntries(Object.entries(drafts).filter(([id]) => !stale.has(id)));
+        notice = { text: `Gmail was not changed. Dropped ${stale.size} decision${stale.size === 1 ? '' : 's'} on changed thread${stale.size === 1 ? '' : 's'}: ${subjects.join('; ')}. Apply again for the other ${pending.length}, then check for new mail.`, tone: 'error' };
+        return;
+      }
       if (!response.ok) throw new Error(result.error || 'Gmail was not changed: the review could not be applied.');
       const outcomes = result.results as { assessmentId: string; status: string }[];
       const byId = new Map(pending.map((d) => [d.assessmentId, d]));

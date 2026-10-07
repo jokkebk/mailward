@@ -14,7 +14,7 @@ export const POST: RequestHandler = async ({ url, request }) => {
     return json({ results: await submitReviewedSet(accountId, body.runId, body.decisions) });
   } catch (error) {
     if (isReauthRequired(error)) return json(reauthResponse(), { status: 401 });
-    if (error instanceof ReviewError) return json({ error: error.message }, { status: error.statusCode });
+    if (error instanceof ReviewError) return json({ error: error.message, stale: error.stale }, { status: error.statusCode });
     console.error(error); return json({ error: 'Review failed' }, { status: 500 });
   }
 };
