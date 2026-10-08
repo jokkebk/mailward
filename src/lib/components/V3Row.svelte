@@ -38,7 +38,7 @@
   const isRule = $derived(item.assessment_source === 'rule');
   const icon = $derived<IconName>(isRule ? ruleIcon(item.deterministic_rule) : item.answers?.category.choice ?? 'other');
   const bars = $derived(section ? tier(item, section) : 0);
-  const quiet = $derived((section === 'trash' || section === 'archive') && bars === 0);
+  const subdued = $derived((section === 'trash' || section === 'archive') && bars === 0);
   const tags = $derived(section ? rowTags(item, section) : []);
   const suggestion = $derived(suggestionOf(item));
   const choice = $derived(choiceOf(draft));
@@ -86,7 +86,7 @@
   class="row"
   class:focused
   class:open={expanded}
-  class:quiet
+  class:subdued
   class:decided={!!choice}
   class:receipt={!!receipt}
   data-row={item.id}
@@ -229,8 +229,8 @@
   .subject { flex-shrink: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; color: var(--ink); }
   .snip { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--ink-3); }
   .what:hover .subject { text-decoration: underline; text-decoration-color: var(--line-strong); text-underline-offset: 2px; }
-  .quiet .name, .quiet .subject { color: var(--ink-2); font-weight: 450; }
-  .quiet .snip { color: var(--ink-4); }
+  .subdued .name, .subdued .subject { color: var(--ink-2); font-weight: 450; }
+  .subdued .snip { color: var(--ink-4); }
 
   .tags { display: flex; align-items: center; gap: .3rem; justify-self: end; }
   .tag { padding: 1px 6px; border-radius: 4px; font-size: 11px; font-weight: 550; white-space: nowrap; }
