@@ -3,7 +3,7 @@ import { Database } from 'bun:sqlite';
 import { drizzle } from 'drizzle-orm/bun-sqlite';
 import { migrate } from 'drizzle-orm/bun-sqlite/migrator';
 import { prepareMessage, prepareThread, representationHasGap, calendarEndTime } from '../src/lib/server/v3/representation';
-import { buildAssessmentRequest, parseAssessment, resolveHandling, resolveTimeZone, TIME_ZONE } from '../src/lib/server/v3/assessment';
+import { buildAssessmentRequest, callJev, parseAssessment, resolveHandling, resolveTimeZone, TIME_ZONE, V3_MODEL } from '../src/lib/server/v3/assessment';
 import { getOrCreatePolicy, createPolicyRevision, STARTER_POLICY } from '../src/lib/server/v3/policy';
 import { recipeHandling, recipeMatches, RECIPE_LIBRARY } from '../src/lib/server/v3/recipes';
 import { sanitizeHtml } from '../src/lib/server/gmail/sanitize';
@@ -17,6 +17,83 @@ function message(id: string, body: string, mime = 'text/plain') {
 }
 const choice = (value: string, options: string[]) => ({ type: 'choice', choice: value, confidence: .9, probabilities: Object.fromEntries(options.map((o) => [o, o === value ? 1 : 0])) });
 const score = (value: number) => ({ type: 'score', score: value, confidence: 1, probabilities: Object.fromEntries([0,1,2,3].map((i) => [String(i), i === value ? 1 : 0])) });
+
+describe('direct TypeSafe assessment', () => {
+  const rep = () => prepareThread('t', ['m'], new Map([['m', message('m', 'Please approve the budget.')]]));
+
+  test('authenticates with the TypeSafe key and preserves typed answers and usage', async () => {
+    const previousKey = process.env.TYPESAFE_API_KEY;
+    process.env.TYPESAFE_API_KEY = ' fixture-typesafe-key ';
+    const now = '2026-10-13T09:00:00.000Z';
+    const answers = {
+      t0_category: choice('conversation', ['sales','notification','newsletter','transaction','conversation','other']),
+      t0_attention: choice('act', ['act','read','glance','none','unclear']),
+      t0_retention: choice('keep', ['keep','disposable','unclear']),
+      t0_urgency: score(1), t0_relevance: score(2),
+      t0_gap: choice('sufficient', ['sufficient','more_body','conversation','attachment','user_context'])
+    };
+    const usage = { input_tokens: 420, output_tokens: 150 };
+    let calls = 0;
+    const fetcher = (async (url: string, init: RequestInit) => {
+      calls++;
+      expect(url).toBe('https://api.typesafe.ai/v1/systemone');
+      expect(new Headers(init.headers).get('Authorization')).toBe('Bearer fixture-typesafe-key');
+      expect(init.method).toBe('POST');
+      const payload = JSON.parse(init.body as string);
+      expect(payload.model).toBe('jev-1.13.0');
+      expect(payload.state.policy).toBe('Retain budget approvals.');
+      expect(payload.state.now).toBe(now);
+      expect(payload.state.threads).toHaveLength(1);
+      expect(Object.keys(payload.questions)).toHaveLength(6);
+      return Response.json({ model: 'jev-1.13.0', answers, usage });
+    }) as unknown as typeof fetch;
+    try {
+      const result = await callJev([rep()], 'Retain budget approvals.', fetcher, now);
+      expect(calls).toBe(1);
+      expect(result.model).toBe(V3_MODEL);
+      expect(result.usage).toEqual(usage);
+      expect(result.assessments).toEqual([parseAssessment(answers, 0)]);
+      expect(resolveHandling(result.assessments[0] as any, rep()).action).toBe('label_todo');
+    } finally {
+      if (previousKey === undefined) delete process.env.TYPESAFE_API_KEY;
+      else process.env.TYPESAFE_API_KEY = previousKey;
+    }
+  });
+
+  test('rejects absent or placeholder credentials and multiple threads before sending data', async () => {
+    const previousKey = process.env.TYPESAFE_API_KEY;
+    let calls = 0;
+    const fetcher = (async () => { calls++; return Response.json({}); }) as unknown as typeof fetch;
+    try {
+      delete process.env.TYPESAFE_API_KEY;
+      await expect(callJev([rep()], 'policy', fetcher)).rejects.toThrow('TYPESAFE_API_KEY');
+      for (const key of [' ', 'your_typesafe_api_key_here']) {
+        process.env.TYPESAFE_API_KEY = key;
+        await expect(callJev([rep()], 'policy', fetcher)).rejects.toThrow('TYPESAFE_API_KEY');
+      }
+      process.env.TYPESAFE_API_KEY = 'fixture-key';
+      await expect(callJev([rep(), rep()], 'policy', fetcher)).rejects.toThrow('one thread');
+      expect(calls).toBe(0);
+    } finally {
+      if (previousKey === undefined) delete process.env.TYPESAFE_API_KEY;
+      else process.env.TYPESAFE_API_KEY = previousKey;
+    }
+  });
+
+  test('does not retry authentication failures or expose the credential in errors', async () => {
+    const previousKey = process.env.TYPESAFE_API_KEY;
+    process.env.TYPESAFE_API_KEY = 'fixture-key';
+    let calls = 0;
+    const fetcher = (async () => { calls++; return new Response('Unauthorized', { status: 401 }); }) as unknown as typeof fetch;
+    try {
+      await expect(callJev([rep()], 'policy', fetcher)).rejects.toThrow('Jev HTTP 401');
+      expect(calls).toBe(1);
+    } finally {
+      if (previousKey === undefined) delete process.env.TYPESAFE_API_KEY;
+      else process.env.TYPESAFE_API_KEY = previousKey;
+    }
+  });
+});
 
 describe('v3 content and handling', () => {
   test('selects plain alternative, preserves multiple unread requests, and exposes omissions', () => {

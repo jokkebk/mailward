@@ -36,9 +36,9 @@ function validateEnvironment() {
 		console.warn('\n⚠️  .env file not found. Using environment variables from system.\n');
 	}
 
-	const key = process.env.OPENROUTER_API_KEY?.trim();
+	const key = process.env.TYPESAFE_API_KEY?.trim();
 	if (!key || key.includes('your_') || key.includes('_here')) {
-		console.warn('\n⚠️  OPENROUTER_API_KEY is unset — set it to assess mail with Jev.\n');
+		console.warn('\n⚠️  TYPESAFE_API_KEY is unset — set it to assess mail with Jev.\n');
 	}
 }
 

@@ -56,7 +56,8 @@ afterAll(() => { try { unlinkSync(dbPath); } catch {} });
 
 describe('v3 reviewed set', () => {
   test('an API gap stays unresolved, then a retry reuses full content and succeeds', async () => {
-    process.env.OPENROUTER_API_KEY = 'fixture-key';
+    const previousKey = process.env.TYPESAFE_API_KEY;
+    process.env.TYPESAFE_API_KEY = 'fixture-key';
     const originalFetch = globalThis.fetch;
     let calls = 0;
     globalThis.fetch = (async () => {
@@ -90,7 +91,15 @@ describe('v3 reviewed set', () => {
       expect(recovered.items[0].actual_model).toBe('jev-fixture');
       expect(calls).toBe(2);
       expect(fullFetches).toBe(1);
-    } finally { globalThis.fetch = originalFetch; delete process.env.OPENROUTER_API_KEY; }
+      const cached = await run();
+      expect(cached.items[0].id).toBe(recovered.items[0].id);
+      expect(calls).toBe(2);
+      expect(fullFetches).toBe(1);
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (previousKey === undefined) delete process.env.TYPESAFE_API_KEY;
+      else process.env.TYPESAFE_API_KEY = previousKey;
+    }
   });
   test('leaves stale decisions unapplied and rejects duplicates', async () => {
     liveIds = ['m1','m2'];

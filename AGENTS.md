@@ -36,7 +36,7 @@ user guide; [DESIGN.md](DESIGN.md) describes the architecture and
   snapshots, inspection, review validation, execution, and undo. `/api/v3/` routes
   are adapters. Jev assesses one thread per request, with four concurrent requests.
 - **Assessment**: `v3/representation.ts` builds the bounded record Jev sees;
-  `v3/assessment.ts` holds the six questions, the OpenRouter call, and
+  `v3/assessment.ts` holds the six questions, the direct TypeSafe API call, and
   `resolveHandling`, which maps answers to a section and proposal.
 - **Recipes**: JSON metadata filters in `v3_recipes`, matched by the generic handler in
   `src/lib/server/v3/recipes.ts`; the first active match skips Jev and proposes Trash,

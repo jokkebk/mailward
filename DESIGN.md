@@ -32,9 +32,10 @@ messages and documents fall through to Jev.
 
 Jev answers six typed questions: category, attention, retention, urgency,
 relevance, and evidence gap. Each request assesses one thread with all six
-questions and the compact policy; up to four requests run concurrently. Thread
-isolation avoids cross-thread interference: in batched calls, one thread's
-evidence was seen to shift another thread's answers.
+questions and the compact policy, using `TYPESAFE_API_KEY` and the pinned
+`jev-1.13.0` model at `https://api.typesafe.ai/v1/systemone`; up to four requests
+run concurrently. Thread isolation avoids cross-thread interference: in batched
+calls, one thread's evidence was seen to shift another thread's answers.
 
 Assessments preserve distributions and the exact representation. Cache identity
 includes input, policy, rubric, model, and relevant date context. Representation

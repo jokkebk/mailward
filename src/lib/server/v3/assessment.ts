@@ -1,8 +1,8 @@
 import type { Assessment, Attention, Category, ChoiceAnswer, Gap, Handling, Representation, Retention, ScoreAnswer } from '$lib/types/v3';
 
-export const V3_MODEL = 'typesafe/jev-1.13';
+export const V3_MODEL = 'jev-1.13.0';
 export const RUBRIC_VERSION = 3;
-const ENDPOINT = 'https://openrouter.ai/api/alpha/decisions';
+const ENDPOINT = 'https://api.typesafe.ai/v1/systemone';
 
 /** Where deadlines and event times are judged: MAILWARD_TIME_ZONE, else the server's own zone. */
 export const TIME_ZONE = resolveTimeZone(process.env.MAILWARD_TIME_ZONE);
@@ -102,8 +102,8 @@ export async function callJev(reps: Representation[], policy: string, fetcher: t
   if (reps.length !== 1) throw new Error('Assess one thread per Jev request to isolate its evidence.');
   const payload = buildAssessmentRequest(reps, policy, now);
   const promptChars = JSON.stringify(payload).length;
-  const key = process.env.OPENROUTER_API_KEY;
-  if (!key) throw new Error('OPENROUTER_API_KEY is not set');
+  const key = process.env.TYPESAFE_API_KEY?.trim();
+  if (!key || key.includes('your_') || key.includes('_here')) throw new Error('TYPESAFE_API_KEY is not set');
   const start = performance.now();
   let response: Response | undefined;
   for (let attempt = 0; attempt < 3; attempt++) {

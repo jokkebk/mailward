@@ -92,7 +92,8 @@ function upsertThread(sqlite: Database, accountId: string, rep: Representation) 
 
 const activeRuns = new Map<string, { id: string; job: Promise<void> }>();
 export async function startAssessment(accountId: string, limit = 100): Promise<string> {
-  if (!process.env.OPENROUTER_API_KEY || process.env.OPENROUTER_API_KEY.includes('your_')) throw new ReviewError('Set OPENROUTER_API_KEY to assess with Jev', 400);
+  const key = process.env.TYPESAFE_API_KEY?.trim();
+  if (!key || key.includes('your_') || key.includes('_here')) throw new ReviewError('Set TYPESAFE_API_KEY to assess with Jev', 400);
   const active = activeRuns.get(accountId);
   if (active) return active.id;
   const sqlite = openV3Database();

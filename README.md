@@ -16,13 +16,13 @@ action can be undone.
 - **Reversible changes.** Trash is Gmail trash, never permanent deletion. Archive marks
   the thread read. TODO adds a label and keeps it unread.
 
-Assessment uses [Jev](https://openrouter.ai/docs/guides/community/jev), TypeSafe's
-decision model on OpenRouter. Jev returns typed answers with probabilities.
-You provide your own OpenRouter key.
+Assessment uses [Jev](https://docs.typesafe.ai/introduction), TypeSafe's
+decision model, through TypeSafe's direct API. Jev returns typed answers with
+probabilities. Mailward pins `jev-1.13.0`; you provide your own TypeSafe key.
 
 ## Try the demo
 
-You need [Bun](https://bun.sh). You don't need a Google or OpenRouter account.
+You need [Bun](https://bun.sh). You don't need a Google or TypeSafe account.
 
 ```bash
 bun install
@@ -53,8 +53,10 @@ bun run dev            # http://localhost:4873
    `http://localhost:4873/auth/callback`.
 4. Copy the client ID and secret to `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`.
 
-**OpenRouter.** Create a key at [openrouter.ai/keys](https://openrouter.ai/keys),
-add some credit, and set it as `OPENROUTER_API_KEY`.
+**TypeSafe.** Create a key at [console.typesafe.ai](https://console.typesafe.ai),
+add some credit, and set it as `TYPESAFE_API_KEY`.
+
+Restart the dev server after changing `.env` so it loads the new values.
 
 Open the app, connect your account, and finish the short setup: your name and role,
 starter guidance and suggested recipes. Then choose **Check for new mail**.
@@ -65,8 +67,7 @@ zone, set `MAILWARD_TIME_ZONE` (for example `America/New_York`).
 ## Cost
 
 Jev bills input tokens only, at **$0.042 per million**. That was the listed
-price in September 2026; the
-[model page](https://openrouter.ai/typesafe/jev-1.13) has the current rate.
+price in October 2026; [TypeSafe](https://typesafe.ai) has the current rate.
 A typical thread uses about 5,000 tokens.
 
 | | Approximate cost |
@@ -81,7 +82,7 @@ Recipe matches cost nothing, and so do threads that were already assessed and ha
 
 All state, including your Google tokens, stays in one local SQLite file
 (`./data/emails.db`). For each unread thread that no recipe handles, Mailward
-sends OpenRouter the headers, clipped body text, links and calendar details,
+sends TypeSafe the headers, clipped body text, links and calendar details,
 together with your guidance. Mailward has no login of its own, so run it only
 on localhost.
 
