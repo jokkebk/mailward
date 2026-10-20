@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, mock, test } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, mock, spyOn, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { drizzle } from 'drizzle-orm/bun-sqlite';
 import { migrate } from 'drizzle-orm/bun-sqlite/migrator';
@@ -10,10 +10,11 @@ process.env.DATABASE_PATH = dbPath;
 const mutations: string[] = [];
 const labelChanges: { add: string[]; remove: string[] }[] = [];
 let actionFailure: Error | null = null;
+let gmailFailure: Error | null = null;
 let liveIds = ['m1'];
 let fullFetches = 0;
 mock.module('../src/lib/server/gmail/client', () => ({
-  async getGmailClient() { return { users: {
+  async getGmailClient() { if (gmailFailure) throw gmailFailure; return { users: {
     threads: { async get() { return { data: { messages: liveIds.map((id) => ({ id, labelIds: ['INBOX','UNREAD'] })) } }; } },
     messages: {
       async list() { return { data: { messages: [{ id: 'm2', threadId: 't2' }] } }; },
@@ -55,6 +56,43 @@ beforeAll(() => {
 afterAll(() => { try { unlinkSync(dbPath); } catch {} });
 
 describe('v3 reviewed set', () => {
+  test('expired Gmail authorization ends the run with a reconnect notice and allows another check', async () => {
+    const previousKey = process.env.TYPESAFE_API_KEY;
+    process.env.TYPESAFE_API_KEY = 'fixture-key';
+    gmailFailure = Object.assign(new Error('Re-authentication required'), { code: 'reauth_required' });
+    const warning = spyOn(console, 'warn').mockImplementation(() => {});
+    const error = spyOn(console, 'error').mockImplementation(() => {});
+    const previousMutations = mutations.length;
+    try {
+      const ids: string[] = [];
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const id = await startAssessment('a', 10);
+        ids.push(id);
+        let result = listRun('a', id);
+        for (let i = 0; i < 100 && result.run.status === 'running'; i++) {
+          await Bun.sleep(5);
+          result = listRun('a', id);
+        }
+        expect(result.run.status).toBe('reauth_required');
+        expect(result.run.ended_at).not.toBeNull();
+        expect(result.items).toHaveLength(0);
+        expect(result.calls).toHaveLength(0);
+        // A subsequent browser request arrives after the background job's
+        // completion handlers have released the account's active-run slot.
+        await Bun.sleep(0);
+      }
+      expect(ids[0]).not.toBe(ids[1]);
+      expect(mutations).toHaveLength(previousMutations);
+      expect(warning).toHaveBeenCalledWith(expect.stringContaining('Reconnect Gmail at /auth'));
+      expect(error).not.toHaveBeenCalled();
+    } finally {
+      gmailFailure = null;
+      warning.mockRestore(); error.mockRestore();
+      if (previousKey === undefined) delete process.env.TYPESAFE_API_KEY;
+      else process.env.TYPESAFE_API_KEY = previousKey;
+    }
+  });
+
   test('an API gap stays unresolved, then a retry reuses full content and succeeds', async () => {
     const previousKey = process.env.TYPESAFE_API_KEY;
     process.env.TYPESAFE_API_KEY = 'fixture-key';

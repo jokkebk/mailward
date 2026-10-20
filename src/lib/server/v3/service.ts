@@ -181,7 +181,8 @@ async function assessAccount(accountId: string, runId: string, limit: number) {
   } catch (error) {
     const reauth = isReauthRequired(error);
     sqlite.query("UPDATE runs SET status = ?, ended_at = ? WHERE id = ?").run(reauth ? 'reauth_required' : 'failed', Date.now(), runId);
-    console.error('v3 run failed:', error);
+    if (reauth) console.warn('v3 run needs Gmail reauthentication. Reconnect Gmail at /auth, then check for new mail.');
+    else console.error('v3 run failed:', error);
   } finally { sqlite.close(); }
 }
 
