@@ -14,7 +14,7 @@ export const GET: RequestHandler = async ({ url }) => {
 export const POST: RequestHandler = async ({ url }) => {
   const accountId = getRequiredAccountId(url);
   if (accountId instanceof Response) return accountId;
-  try { return json({ runId: await startAssessment(accountId, Number(url.searchParams.get('limit') ?? 100)) }); }
+  try { return json({ runId: await startAssessment(accountId, url.searchParams.has('limit') ? Number(url.searchParams.get('limit')) : undefined) }); }
   catch (error) {
     if (isReauthRequired(error)) return json(reauthResponse(), { status: 401 });
     if (error instanceof ReviewError) return json({ error: error.message }, { status: error.statusCode });

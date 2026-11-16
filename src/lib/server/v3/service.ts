@@ -91,7 +91,7 @@ function upsertThread(sqlite: Database, accountId: string, rep: Representation) 
 }
 
 const activeRuns = new Map<string, { id: string; job: Promise<void> }>();
-export async function startAssessment(accountId: string, limit = 100): Promise<string> {
+export async function startAssessment(accountId: string, limit = 250): Promise<string> {
   const key = process.env.TYPESAFE_API_KEY?.trim();
   if (!key || key.includes('your_') || key.includes('_here')) throw new ReviewError('Set TYPESAFE_API_KEY to assess with Jev', 400);
   const active = activeRuns.get(accountId);
@@ -103,7 +103,7 @@ export async function startAssessment(accountId: string, limit = 100): Promise<s
   const id = crypto.randomUUID();
   sqlite.query('INSERT INTO runs (id, account_id, started_at, scope, status) VALUES (?, ?, ?, ?, ?)').run(id, accountId, Date.now(), 'v3', 'running');
   sqlite.close();
-  const job = assessAccount(accountId, id, Math.min(200, Math.max(1, limit))).finally(() => activeRuns.delete(accountId));
+  const job = assessAccount(accountId, id, Math.min(250, Math.max(1, limit))).finally(() => activeRuns.delete(accountId));
   activeRuns.set(accountId, { id, job });
   return id;
 }

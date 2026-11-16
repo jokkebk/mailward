@@ -11,7 +11,7 @@ review validation, execution, and undo. SvelteKit's `/api/v3/` handlers adapt th
 service for the review page at `/`; `/v3` redirects to `/`.
 
 A run scans unread inbox messages from the last 30 days, with a default limit of
-100 threads and a maximum of 200. New snapshots fetch full content for up to four
+250 threads and a maximum of 250. New snapshots fetch full content for up to four
 unread messages per thread. The deterministic representation keeps headers,
 bounded body text, meaningful links, calendar details, and explicit flags for
 clipping, omitted unread messages, unread attachments, and unavailable content.
